@@ -4,6 +4,7 @@ import { pool } from "../db.js";
 const router = express.Router();
 
 // Save questionnaire completion
+// Backend API - Handles both draft and completion
 router.post("/save-questionnaire-completion", async (req, res) => {
   try {
     const {
@@ -13,6 +14,7 @@ router.post("/save-questionnaire-completion", async (req, res) => {
       responses,
       attempt_number,
       created_at,
+      status = "completed", // NEW: Add status parameter, defaults to "completed"
     } = req.body;
 
     // Validate required fields
@@ -45,18 +47,6 @@ router.post("/save-questionnaire-completion", async (req, res) => {
 
     const { subscription_id, plan_id } = currentSub[0];
 
-    // Calculate attempt number for this specific subscription
-    const [prevAttempts] = await pool.query(
-      `
-      SELECT COUNT(*) as count 
-      FROM questionnaire_responses 
-      WHERE user_id = ? AND subscription_id = ? AND questionnaire_id = ? AND status = 'completed'
-    `,
-      [user_id, subscription_id, questionnaire_id]
-    );
-
-    const calculatedAttemptNumber = (prevAttempts[0]?.count || 0) + 1;
-
     // Convert dates to MySQL datetime format
     const now = new Date();
     const mysqlDatetime = now.toISOString().slice(0, 19).replace("T", " ");
@@ -64,39 +54,176 @@ router.post("/save-questionnaire-completion", async (req, res) => {
       ? new Date(created_at).toISOString().slice(0, 19).replace("T", " ")
       : mysqlDatetime;
 
-    // Insert into questionnaire_responses table with subscription_id
-    const [result] = await pool.query(
-      `INSERT INTO questionnaire_responses 
-       (user_id, subscription_id, questionnaire_id, answers, status, plan_id, attempt_number, completed_at, created_at, updated_at) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        user_id,
-        subscription_id,
-        questionnaire_id,
-        JSON.stringify(responses),
-        "completed",
-        plan_id,
-        calculatedAttemptNumber,
-        mysqlDatetime,
-        createdAtMysql,
-        mysqlDatetime,
-      ]
-    );
+    // Handle draft vs completed differently
+    console.log(status);
+    if (status === "draft") {
+      // Check if a draft already exists
+      const [existingDraft] = await pool.query(
+        `SELECT id, version FROM questionnaire_responses 
+         WHERE user_id = ? AND subscription_id = ? AND questionnaire_id = ? AND status = 'draft'`,
+        [user_id, subscription_id, questionnaire_id]
+      );
 
-    res.json({
-      success: true,
-      message: "Questionnaire completion saved successfully",
-      id: result.insertId,
-      attempt_number: calculatedAttemptNumber,
-    });
+      if (existingDraft.length > 0) {
+        // Update existing draft
+        const newVersion = (existingDraft[0].version || 1) + 1;
+        await pool.query(
+          `UPDATE questionnaire_responses 
+           SET answers = ?, updated_at = ?, version = ?
+           WHERE id = ?`,
+          [
+            JSON.stringify(responses),
+            mysqlDatetime,
+            newVersion,
+            existingDraft[0].id,
+          ]
+        );
+
+        return res.json({
+          success: true,
+          message: "Draft updated successfully",
+          id: existingDraft[0].id,
+          status: "draft",
+          version: newVersion,
+        });
+      } else {
+        // Create new draft
+        const [result] = await pool.query(
+          `INSERT INTO questionnaire_responses 
+           (user_id, subscription_id, questionnaire_id, answers, status, plan_id, attempt_number, created_at, updated_at, version) 
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            user_id,
+            subscription_id,
+            questionnaire_id,
+            JSON.stringify(responses),
+            "draft",
+            plan_id,
+            1, // Drafts always have attempt_number = 1
+            createdAtMysql,
+            mysqlDatetime,
+            1, // Initial version
+          ]
+        );
+
+        return res.json({
+          success: true,
+          message: "Draft saved successfully",
+          id: result.insertId,
+          status: "draft",
+          version: 1,
+        });
+      }
+    } else {
+      // Handle completed submission
+      // Calculate attempt number for completed submissions
+      const [prevAttempts] = await pool.query(
+        `
+        SELECT COUNT(*) as count 
+        FROM questionnaire_responses 
+        WHERE user_id = ? AND subscription_id = ? AND questionnaire_id = ? AND status = 'completed'
+      `,
+        [user_id, subscription_id, questionnaire_id]
+      );
+
+      const calculatedAttemptNumber = (prevAttempts[0]?.count || 0) + 1;
+
+      // Insert completed questionnaire
+      const [result] = await pool.query(
+        `INSERT INTO questionnaire_responses 
+         (user_id, subscription_id, questionnaire_id, answers, status, plan_id, attempt_number, completed_at, created_at, updated_at) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          user_id,
+          subscription_id,
+          questionnaire_id,
+          JSON.stringify(responses),
+          "completed",
+          plan_id,
+          calculatedAttemptNumber,
+          mysqlDatetime, // Set completed_at for completed status
+          createdAtMysql,
+          mysqlDatetime,
+        ]
+      );
+
+      // Optional: Delete any existing drafts after successful completion
+      await pool.query(
+        `DELETE FROM questionnaire_responses 
+         WHERE user_id = ? AND subscription_id = ? AND questionnaire_id = ? AND status = 'draft'`,
+        [user_id, subscription_id, questionnaire_id]
+      );
+
+      return res.json({
+        success: true,
+        message: "Questionnaire completion saved successfully",
+        id: result.insertId,
+        attempt_number: calculatedAttemptNumber,
+        status: "completed",
+      });
+    }
   } catch (error) {
-    console.error("Error saving questionnaire completion:", error);
+    console.error("Error saving questionnaire:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to save questionnaire completion: " + error.message,
+      message: "Failed to save questionnaire: " + error.message,
     });
   }
 });
+
+// NEW: Add endpoint to retrieve draft if exists
+router.get(
+  "/get-questionnaire-draft/:user_id/:questionnaire_id",
+  async (req, res) => {
+    try {
+      const { user_id, questionnaire_id } = req.params;
+
+      // Get user's current active subscription
+      const [currentSub] = await pool.query(
+        `SELECT id as subscription_id FROM user_subscriptions 
+       WHERE user_id = ? AND status = 'active' 
+       ORDER BY started_at DESC LIMIT 1`,
+        [user_id]
+      );
+
+      if (currentSub.length === 0) {
+        return res.json({ success: true, draft: null });
+      }
+
+      const { subscription_id } = currentSub[0];
+
+      // Get draft if exists
+      const [draft] = await pool.query(
+        `SELECT id, answers, version, created_at, updated_at 
+       FROM questionnaire_responses 
+       WHERE user_id = ? AND subscription_id = ? AND questionnaire_id = ? AND status = 'draft'
+       ORDER BY updated_at DESC LIMIT 1`,
+        [user_id, subscription_id, questionnaire_id]
+      );
+
+      if (draft.length > 0) {
+        return res.json({
+          success: true,
+          draft: {
+            id: draft[0].id,
+            answers: JSON.parse(draft[0].answers),
+            version: draft[0].version,
+            created_at: draft[0].created_at,
+            updated_at: draft[0].updated_at,
+          },
+        });
+      } else {
+        return res.json({ success: true, draft: null });
+      }
+    } catch (error) {
+      console.error("Error retrieving draft:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to retrieve draft: " + error.message,
+      });
+    }
+  }
+);
 
 // Get questionnaire completions for a user
 router.get("/questionnaire-completions", async (req, res) => {

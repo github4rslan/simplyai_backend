@@ -114,6 +114,7 @@ router.post("/login", validateLogin, async (req, res) => {
 
     const profile = profiles[0];
 
+    console.log(profile, "-----------------User profile");
     // Check if this is an OAuth account
     if (profile.auth_provider === "google" && profile.google_id) {
       // Check if they have a password (might have linked accounts)
@@ -196,7 +197,10 @@ router.get("/me", authenticateToken, async (req, res) => {
 // Update user profile endpoint
 router.patch("/me", authenticateToken, async (req, res) => {
   try {
+    console.log("in First Me");
+
     const userId = req.user.userId;
+    console.log("in First Me");
     const { firstName, lastName } = req.body;
 
     // Validate input
@@ -593,29 +597,73 @@ router.get(
     try {
       const user = req.user;
 
-      // Check if this is a new user
+      // ✅ Check if this is a new user
       if (user.isNewUser) {
-        console.log("🆕 New user from Google, redirecting to pricing page");
+        console.log("🆕 New user from Google, creating account automatically");
 
-        // Store Google profile data temporarily in session or send to frontend
-        const tempData = encodeURIComponent(JSON.stringify(user.googleProfile));
+        const googleProfile = user.googleProfile;
 
-        // Redirect to pricing/registration page with Google data
+        // ✅ Use null for empty values
+        const firstName = googleProfile.given_name || null;
+        const lastName = googleProfile.family_name || null;
+        const email = googleProfile.email;
+        const googleId = googleProfile.id;
+
+        // Validate required fields
+        if (!email || !googleId) {
+          console.error("❌ Missing required Google profile data");
+          return res.redirect(
+            `${FRONTEND_URL}/login?error=missing_profile_data`
+          );
+        }
+
+        // ✅ Generate UUID for new user (since your id is char(36))
+        const { v4: uuidv4 } = await import("uuid");
+        const newUserId = uuidv4();
+
+        // Create new user account with free plan by default
+        await pool.execute(
+          `INSERT INTO profiles 
+           (id, email, first_name, last_name, google_id, auth_provider, subscription_plan, role, created_at, updated_at, last_activity) 
+           VALUES (?, ?, ?, ?, ?, 'google', 'free', 'user', NOW(), NOW(), NOW())`,
+          [newUserId, email, firstName, lastName, googleId]
+        );
+
+        console.log("✅ New user created with ID:", newUserId);
+
+        // Generate token for the new user
+        const token = jwt.sign(
+          {
+            userId: newUserId,
+            email: email,
+            role: "user",
+          },
+          JWT_SECRET,
+          { expiresIn: "24h" }
+        );
+
+        const userData = {
+          id: newUserId,
+          email: email,
+          firstName: firstName,
+          lastName: lastName,
+          phone: null,
+          role: "user",
+          isAdmin: false,
+          subscriptionPlan: "free",
+        };
+
+        // Redirect to dashboard with token
         return res.redirect(
-          `${FRONTEND_URL}/register?provider=google&data=${tempData}`
+          `${FRONTEND_URL}/auth/callback?token=${token}&user=${encodeURIComponent(
+            JSON.stringify(userData)
+          )}&newUser=true`
         );
       }
 
       // Existing user - generate token and login
       console.log("✅ Existing user login via Google:", user.email);
 
-      // Update last activity
-      await pool.execute(
-        "UPDATE profiles SET last_activity = NOW() WHERE id = ?",
-        [user.id]
-      );
-
-      // Generate JWT token
       const token = jwt.sign(
         {
           userId: user.id,
@@ -626,7 +674,6 @@ router.get(
         { expiresIn: "24h" }
       );
 
-      // Prepare user data
       const userData = {
         id: user.id,
         email: user.email,
@@ -635,9 +682,9 @@ router.get(
         phone: user.phone,
         role: user.role,
         isAdmin: user.role === "administrator",
+        subscriptionPlan: user.subscription_plan,
       };
 
-      // Redirect to frontend with token
       res.redirect(
         `${FRONTEND_URL}/auth/callback?token=${token}&user=${encodeURIComponent(
           JSON.stringify(userData)
@@ -645,6 +692,10 @@ router.get(
       );
     } catch (error) {
       console.error("Google callback error:", error);
+      console.error("Error details:", {
+        message: error.message,
+        stack: error.stack,
+      });
       res.redirect(`${FRONTEND_URL}/login?error=token_generation_failed`);
     }
   }
@@ -670,14 +721,15 @@ router.get(
 
       // Check if this is a new user
       if (user.isNewUser) {
-        console.log("🆕 New user from Facebook, redirecting to pricing page");
+        console.log("🆕 New user from Facebook, redirecting to register page");
 
         const tempData = encodeURIComponent(
           JSON.stringify(user.facebookProfile)
         );
 
+        // ✅ Already has type=free
         return res.redirect(
-          `${FRONTEND_URL}/register?provider=facebook&data=${tempData}`
+          `${FRONTEND_URL}/register?provider=facebook&data=${tempData}&type=free`
         );
       }
 
@@ -719,7 +771,7 @@ router.get(
         )}`
       );
     } catch (error) {
-      console.error("Facebook callback error:", error);
+      console.error("❌ Facebook callback error:", error);
       res.redirect(`${FRONTEND_URL}/login?error=token_generation_failed`);
     }
   }
@@ -827,8 +879,8 @@ router.post("/register/google", async (req, res) => {
       await connection.execute(
         `INSERT INTO profiles 
          (id, email, first_name, last_name, full_name, google_id, 
-          auth_provider, email_verified, created_at, updated_at) 
-         VALUES (?, ?, ?, ?, ?, ?, 'google', TRUE, NOW(), NOW())`,
+          auth_provider, created_at, updated_at) 
+         VALUES (?, ?, ?, ?, ?, ?, 'google', NOW(), NOW())`,
         [
           userId,
           email,
@@ -1032,8 +1084,8 @@ router.post("/register/facebook", async (req, res) => {
       await connection.execute(
         `INSERT INTO profiles 
          (id, email, first_name, last_name, full_name, facebook_id,
-          auth_provider, email_verified, created_at, updated_at) 
-         VALUES (?, ?, ?, ?, ?, ?, 'facebook', TRUE, NOW(), NOW())`,
+          auth_provider, created_at, updated_at) 
+         VALUES (?, ?, ?, ?, ?, ?, 'facebook', NOW(), NOW())`,
         [
           userId,
           email,
@@ -1151,14 +1203,35 @@ router.post("/register/facebook", async (req, res) => {
 // Register-with-plan endpoint for frontend compatibility (free plan registration)
 router.post("/register-with-plan", async (req, res) => {
   try {
-    // Accepts: { email, password, firstName, lastName, phone, planId }
-    const { email, password, firstName, lastName, phone, planId } = req.body;
+    const {
+      email,
+      password,
+      firstName,
+      lastName,
+      phone,
+      planId,
+      googleId,
+      facebookId,
+      authProvider,
+    } = req.body;
 
     console.log(req.body, "---------------");
-    if (!email || !password || !firstName || !lastName || !planId) {
+
+    // Validate required fields - password is NOT required for OAuth users
+    const isOAuthUser = authProvider && (googleId || facebookId);
+
+    if (!email || !firstName || !lastName || !planId) {
       return res.status(400).json({
         success: false,
         message: "Missing required fields for registration-with-plan",
+      });
+    }
+
+    // Password is required ONLY for non-OAuth users
+    if (!isOAuthUser && !password) {
+      return res.status(400).json({
+        success: false,
+        message: "Password is required for email registration",
       });
     }
 
@@ -1179,8 +1252,8 @@ router.post("/register-with-plan", async (req, res) => {
     let finalPlanId = planId;
     const uuidRegex =
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
     if (!uuidRegex.test(planId)) {
-      // It's a plan name, so we need to find the corresponding plan ID
       [planResult] = await pool.execute(
         "SELECT id, name, is_free, price FROM subscription_plans WHERE name = ? OR id = ?",
         [planId, planId]
@@ -1205,6 +1278,7 @@ router.post("/register-with-plan", async (req, res) => {
         });
       }
     }
+
     const plan = planResult[0];
     if (!plan.is_free && plan.price > 0) {
       return res.status(400).json({
@@ -1213,34 +1287,52 @@ router.post("/register-with-plan", async (req, res) => {
       });
     }
 
-    // Hash password
-    const saltRounds = 12;
-    const hashedPassword = await bcrypt.hash(password, saltRounds);
+    // Hash password only for non-OAuth users
+    let hashedPassword = null;
+    if (password) {
+      const saltRounds = 12;
+      hashedPassword = await bcrypt.hash(password, saltRounds);
+    }
+
     const userId = uuidv4();
 
     // Start transaction
     const connection = await pool.getConnection();
     await connection.beginTransaction();
+
     try {
+      // Insert into auth table (only if password exists)
+      if (hashedPassword) {
+        await connection.execute(
+          "INSERT INTO auth (user_id, password_hash, created_at, updated_at) VALUES (?, ?, NOW(), NOW())",
+          [userId, hashedPassword]
+        );
+      }
+
+      // ✅ FIXED: Removed email_verified - only 9 values for 9 columns
       await connection.execute(
-        "INSERT INTO auth (user_id, password_hash, created_at, updated_at) VALUES (?, ?, NOW(), NOW())",
-        [userId, hashedPassword]
-      );
-      await connection.execute(
-        "INSERT INTO profiles (id, email, first_name, last_name, phone, full_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())",
+        `INSERT INTO profiles 
+         (id, email, first_name, last_name, phone, full_name, google_id, facebook_id, auth_provider, created_at, updated_at) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
         [
-          userId,
-          email,
-          firstName,
-          lastName,
-          phone || null,
-          `${firstName} ${lastName}`,
+          userId, // id
+          email, // email
+          firstName, // first_name
+          lastName, // last_name
+          phone || null, // phone
+          `${firstName} ${lastName}`, // full_name
+          googleId || null, // google_id
+          facebookId || null, // facebook_id
+          authProvider || "email", // auth_provider
         ]
       );
+
+      // Insert subscription
       await connection.execute(
         "INSERT INTO user_subscriptions (id, user_id, plan_id, status, started_at, created_at, updated_at) VALUES (?, ?, ?, ?, NOW(), NOW(), NOW())",
         [uuidv4(), userId, finalPlanId, "active"]
       );
+
       await connection.commit();
       connection.release();
 
@@ -1260,12 +1352,15 @@ router.post("/register-with-plan", async (req, res) => {
           isFreeRegistration: true,
         });
       } catch (emailError) {
+        console.error("Email sending failed:", emailError);
         // Don't fail registration if email fails
       }
 
       res.status(201).json({
         success: true,
-        message: "User registered successfully",
+        message: isOAuthUser
+          ? "User registered successfully with OAuth"
+          : "User registered successfully",
         user: {
           id: userId,
           email,
@@ -1275,6 +1370,7 @@ router.post("/register-with-plan", async (req, res) => {
           planId: finalPlanId,
           planName: plan.name,
           isFree: true,
+          authProvider: authProvider || "email",
         },
         token,
       });
@@ -1284,6 +1380,7 @@ router.post("/register-with-plan", async (req, res) => {
       throw error;
     }
   } catch (error) {
+    console.error("Registration error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to register user with plan",

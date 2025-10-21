@@ -28,7 +28,7 @@ router.get("/user/:userId", async (req, res) => {
 router.get("/:reportId", async (req, res) => {
   try {
     const { reportId } = req.params;
-
+    console.log("reportId", reportId);
     const [rows] = await pool.query(
       `SELECT id, user_id, questionnaire_id, title, content, pdf_url, created_at, template_id
        FROM reports 

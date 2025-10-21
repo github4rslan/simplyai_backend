@@ -270,11 +270,16 @@ class AuthService {
    */
   static async getUserById(userId) {
     const [users] = await pool.execute(
-      `SELECT id, email, first_name, last_name, phone, address, fiscal_code, 
-              role, subscription_plan, subscription_expiry, created_at, 
-              updated_at, last_activity
-       FROM profiles 
-       WHERE id = ?`,
+      `SELECT p.id, p.email, p.first_name, p.last_name, p.phone, p.address, 
+            p.fiscal_code, p.role, p.subscription_plan, p.subscription_expiry, 
+            p.created_at, p.updated_at, p.last_activity, p.auth_provider,
+            p.google_id, p.facebook_id,
+            us.plan_id, us.status as subscription_status, us.started_at,
+            sp.name as plan_name, sp.price as plan_price, sp.is_free as plan_is_free
+     FROM profiles p
+     LEFT JOIN user_subscriptions us ON p.id = us.user_id AND us.status = 'active'
+     LEFT JOIN subscription_plans sp ON us.plan_id = sp.id
+     WHERE p.id = ?`,
       [userId]
     );
 
@@ -293,11 +298,25 @@ class AuthService {
       address: user.address,
       fiscalCode: user.fiscal_code,
       role: user.role,
+      authProvider: user.auth_provider || "email",
+      googleId: user.google_id,
+      facebookId: user.facebook_id,
       subscriptionPlan: user.subscription_plan,
       subscriptionExpiry: user.subscription_expiry,
       lastActivity: user.last_activity,
       createdAt: user.created_at,
       updatedAt: user.updated_at,
+      // Include active subscription details
+      subscription: user.plan_id
+        ? {
+            planId: user.plan_id,
+            planName: user.plan_name,
+            planPrice: user.plan_price,
+            isFree: user.plan_is_free,
+            status: user.subscription_status,
+            startedAt: user.started_at,
+          }
+        : null,
     };
   }
 
