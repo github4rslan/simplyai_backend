@@ -77,8 +77,26 @@ app.use("/", express.static(path.join(__dirname, "../public"), {
   }
 }));
 
-// Serve frontend build files statically
-app.use(express.static(path.join(__dirname, "../simplyai-FE/dist")));
+// Serve frontend build files statically if present (Render may not have dist)
+const frontendDist = path.join(__dirname, "../simplyai-FE/dist");
+if (fs.existsSync(frontendDist)) {
+  app.use(express.static(frontendDist));
+
+  // SPA fallback
+  app.get("*", (req, res, next) => {
+    const indexPath = path.join(frontendDist, "index.html");
+    if (fs.existsSync(indexPath)) {
+      return res.sendFile(indexPath);
+    }
+    return next();
+  });
+} else {
+  console.warn("Frontend dist not found; skipping static serve of ../simplyai-FE/dist");
+}
+
+// Health checks
+app.get("/health", (req, res) => res.json({ ok: true }));
+app.get("/api/health", (req, res) => res.json({ ok: true }));
 
 // Special handling for favicon.ico with no-cache headers
 app.get("/favicon.ico", (req, res) => {
@@ -124,8 +142,12 @@ app.use("/api/ai", aiIntegrationRoutes);
 app.use("/api/reports", reportsRoutes);
 app.use("/api/users", usersRoutes);
 
-app.get(/^\/(?!api).*/, (req, res) => {
-  res.sendFile(path.join(__dirname, "../simplyai-FE/dist/index.html"));
+app.get(/^\/(?!api).*/, (req, res, next) => {
+  const fallback = path.join(__dirname, "../simplyai-FE/dist/index.html");
+  if (fs.existsSync(fallback)) {
+    return res.sendFile(fallback);
+  }
+  return next();
 });
 
 app.use(notFoundHandler);
