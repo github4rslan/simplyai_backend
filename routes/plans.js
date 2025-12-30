@@ -1,78 +1,57 @@
 import express from "express";
-import { pool } from "../db.js";
+import { db } from "../config/knex.js";
+import { planModel } from "../models/index.js";
 import crypto from "crypto";
 
 const router = express.Router();
 
+// Helper function to normalize plan data
+const normalizePlan = (plan) => ({
+  ...plan,
+  features:
+    typeof plan.features === "string"
+      ? JSON.parse(plan.features || "[]")
+      : plan.features,
+  options:
+    typeof plan.options === "string"
+      ? JSON.parse(plan.options || "{}")
+      : plan.options,
+  // Convert tinyint to boolean for consistency
+  is_popular: Boolean(plan.is_popular),
+  is_free: Boolean(plan.is_free),
+  active: Boolean(plan.active),
+});
+
 // Get all subscription plans
 router.get("/", async (req, res) => {
   try {
-    const [rows] = await pool.query(
-      "SELECT * FROM subscription_plans WHERE active = 1 ORDER BY sort_order ASC, created_at DESC"
-    );
+    const rows = await db("subscription_plans")
+      .where("active", 1)
+      .orderBy("sort_order", "asc")
+      .orderBy("created_at", "desc");
 
-    const plans = rows.map((plan) => ({
-      ...plan,
-      features:
-        typeof plan.features === "string"
-          ? JSON.parse(plan.features || "[]")
-          : plan.features,
-      options:
-        typeof plan.options === "string"
-          ? JSON.parse(plan.options || "{}")
-          : plan.options,
-      // Convert tinyint to boolean for consistency
-      is_popular: Boolean(plan.is_popular),
-      is_free: Boolean(plan.is_free),
-      active: Boolean(plan.active),
-    }));
+    const plans = rows.map(normalizePlan);
 
-    res.json({
-      success: true,
-      data: plans,
-    });
+    res.success("Plans retrieved successfully", plans);
   } catch (error) {
     console.error("Error fetching plans:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch plans",
-    });
+    res.fail(500, "Failed to fetch plans", { error: error.message });
   }
 });
 
 // Get all subscription plans for admin (includes inactive)
 router.get("/admin/all", async (req, res) => {
   try {
-    const [rows] = await pool.query(
-      "SELECT * FROM subscription_plans ORDER BY sort_order ASC, created_at DESC"
-    );
+    const rows = await db("subscription_plans")
+      .orderBy("sort_order", "asc")
+      .orderBy("created_at", "desc");
 
-    const plans = rows.map((plan) => ({
-      ...plan,
-      features:
-        typeof plan.features === "string"
-          ? JSON.parse(plan.features || "[]")
-          : plan.features,
-      options:
-        typeof plan.options === "string"
-          ? JSON.parse(plan.options || "{}")
-          : plan.options,
-      // Convert tinyint to boolean for consistency
-      is_popular: Boolean(plan.is_popular),
-      is_free: Boolean(plan.is_free),
-      active: Boolean(plan.active),
-    }));
+    const plans = rows.map(normalizePlan);
 
-    res.json({
-      success: true,
-      data: plans,
-    });
+    res.success("All plans retrieved successfully", plans);
   } catch (error) {
     console.error("Error fetching all plans for admin:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch all plans",
-    });
+    res.fail(500, "Failed to fetch all plans", { error: error.message });
   }
 });
 
@@ -80,42 +59,20 @@ router.get("/admin/all", async (req, res) => {
 router.get("/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const [rows] = await pool.query(
-      "SELECT * FROM subscription_plans WHERE id = ? AND active = 1",
-      [id]
-    );
+    const plan = await db("subscription_plans")
+      .where({ id })
+      .where("active", 1)
+      .first();
 
-    if (rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Plan not found",
-      });
+    if (!plan) {
+      return res.fail(404, "Plan not found");
     }
 
-    const plan = rows[0];
-    plan.features =
-      typeof plan.features === "string"
-        ? JSON.parse(plan.features || "[]")
-        : plan.features;
-    plan.options =
-      typeof plan.options === "string"
-        ? JSON.parse(plan.options || "{}")
-        : plan.options;
-    // Convert tinyint to boolean for consistency
-    plan.is_popular = Boolean(plan.is_popular);
-    plan.is_free = Boolean(plan.is_free);
-    plan.active = Boolean(plan.active);
-
-    res.json({
-      success: true,
-      data: plan,
-    });
+    const normalizedPlan = normalizePlan(plan);
+    res.success("Plan retrieved successfully", normalizedPlan);
   } catch (error) {
     console.error("Error fetching plan:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch plan",
-    });
+    res.fail(500, "Failed to fetch plan", { error: error.message });
   }
 });
 
@@ -123,42 +80,17 @@ router.get("/:id", async (req, res) => {
 router.get("/admin/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const [rows] = await pool.query(
-      "SELECT * FROM subscription_plans WHERE id = ?",
-      [id]
-    );
+    const plan = await db("subscription_plans").where({ id }).first();
 
-    if (rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Plan not found",
-      });
+    if (!plan) {
+      return res.fail(404, "Plan not found");
     }
 
-    const plan = rows[0];
-    plan.features =
-      typeof plan.features === "string"
-        ? JSON.parse(plan.features || "[]")
-        : plan.features;
-    plan.options =
-      typeof plan.options === "string"
-        ? JSON.parse(plan.options || "{}")
-        : plan.options;
-    // Convert tinyint to boolean for consistency
-    plan.is_popular = Boolean(plan.is_popular);
-    plan.is_free = Boolean(plan.is_free);
-    plan.active = Boolean(plan.active);
-
-    res.json({
-      success: true,
-      data: plan,
-    });
+    const normalizedPlan = normalizePlan(plan);
+    res.success("Plan retrieved successfully", normalizedPlan);
   } catch (error) {
     console.error("Error fetching plan for admin:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch plan",
-    });
+    res.fail(500, "Failed to fetch plan", { error: error.message });
   }
 });
 
@@ -198,68 +130,45 @@ router.post("/", async (req, res) => {
 
     // Test database connection first
     try {
-      await pool.query("SELECT 1");
+      await db.raw("SELECT 1");
       console.log("Database connection successful");
     } catch (dbError) {
       console.error("Database connection failed:", dbError);
-      return res.status(500).json({
-        success: false,
-        message: "Database connection failed",
-        error: dbError.message,
-      });
+      return res.fail(500, "Database connection failed", { error: dbError.message });
     }
 
-    const query = `
-      INSERT INTO subscription_plans (id, name, description, price, is_free, features, active, button_text, button_variant, sort_order, \`interval\`, is_popular, created_at, updated_at, plan_type, options)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `;
-
-    const queryParams = [
+    // Prepare data for insertion
+    const planData = {
       id,
       name,
-      description || "",
-      price || 0,
-      is_free ? 1 : 0,
-      JSON.stringify(features || []),
-      active ? 1 : 0,
-      button_text || "",
-      button_variant || "",
-      sort_order || 0,
-      interval || "month",
-      is_popular ? 1 : 0,
-      created_at,
-      updated_at,
-      plan_type || "single",
-      JSON.stringify(options || {}),
-    ];
+      description: description || "",
+      price: price || 0,
+      is_free: is_free ? 1 : 0,
+      features: JSON.stringify(features || []),
+      active: active ? 1 : 0,
+      button_text: button_text || "",
+      button_variant: button_variant || "",
+      sort_order: sort_order || 0,
+      interval: interval || "month",
+      is_popular: is_popular ? 1 : 0,
+      created_at: created_at || new Date(),
+      updated_at: updated_at || new Date(),
+      plan_type: plan_type || "single",
+      options: JSON.stringify(options || {}),
+    };
 
-    console.log("Executing query:", query);
-    console.log("Query parameters:", queryParams);
+    console.log("Inserting plan with Knex:", planData);
 
-    const [result] = await pool.execute(query, queryParams);
-
-    console.log("Database operation result:", result);
-    console.log("Affected rows:", result.affectedRows);
-    console.log("Insert ID:", result.insertId);
+    // Insert using Knex
+    await db("subscription_plans").insert(planData);
 
     // Verify the insert by selecting the created record
-    const [verifyResult] = await pool.query(
-      "SELECT * FROM subscription_plans WHERE id = ?",
-      [id]
-    );
+    const verifyResult = await db("subscription_plans").where("id", id).first();
     console.log("Verification query result:", verifyResult);
 
-    res.json({
-      success: true,
-      message: "Plan created successfully",
-      debug: {
-        requestBody: req.body,
-        dbResult: result,
-        affectedRows: result.affectedRows,
-        insertId: result.insertId,
-        verificationResult: verifyResult,
-      },
-    });
+    const normalizedPlan = normalizePlan(verifyResult);
+
+    res.success("Plan created successfully", normalizedPlan);
   } catch (error) {
     console.error("Error creating plan:", error);
     res.status(500).json({
@@ -304,70 +213,43 @@ router.put("/:id", async (req, res) => {
     }
 
     // Check if plan exists
-    const [existingPlan] = await pool.query(
-      "SELECT * FROM subscription_plans WHERE id = ?",
-      [id]
-    );
-    if (existingPlan.length === 0) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Plan not found" });
+    const existingPlan = await db("subscription_plans").where("id", id).first();
+    if (!existingPlan) {
+      return res.fail(404, "Plan not found");
     }
 
-    const query = `UPDATE subscription_plans SET 
-      name = ?, description = ?, price = ?, is_free = ?, features = ?, active = ?, 
-      button_text = ?, button_variant = ?, sort_order = ?, \`interval\` = ?, is_popular = ?, updated_at = ?, plan_type = ?, options = ?
-      WHERE id = ?`;
-
-    // Convert ISO string to MySQL datetime format
-    const mysqlDateTime = new Date(updated_at || new Date())
-      .toISOString()
-      .slice(0, 19)
-      .replace("T", " ");
-
-    const queryParams = [
+    // Prepare update data
+    const updateData = {
       name,
-      description || "",
-      price || 0,
-      is_free ? 1 : 0,
-      JSON.stringify(features || []),
-      active ? 1 : 0,
-      button_text || "",
-      button_variant || "",
-      sort_order || 0,
-      interval || "month",
-      is_popular ? 1 : 0,
-      mysqlDateTime,
-      plan_type || "single",
-      JSON.stringify(options || {}),
-      id,
-    ];
+      description: description || "",
+      price: price || 0,
+      is_free: is_free ? 1 : 0,
+      features: JSON.stringify(features || []),
+      active: active ? 1 : 0,
+      button_text: button_text || "",
+      button_variant: button_variant || "",
+      sort_order: sort_order || 0,
+      interval: interval || "month",
+      is_popular: is_popular ? 1 : 0,
+      updated_at: updated_at || new Date(),
+      plan_type: plan_type || "single",
+      options: JSON.stringify(options || {}),
+    };
 
-    console.log("Executing update query:", query);
-    console.log("Query parameters:", queryParams);
+    console.log("Updating plan with Knex:", { id, updateData });
 
-    const [result] = await pool.execute(query, queryParams);
+    // Update using Knex
+    const affectedRows = await db("subscription_plans").where("id", id).update(updateData);
 
-    console.log("Database update result:", result);
-    console.log("Affected rows:", result.affectedRows);
+    console.log("Database update result - affected rows:", affectedRows);
 
     // Verify the update by selecting the updated record
-    const [verifyResult] = await pool.query(
-      "SELECT * FROM subscription_plans WHERE id = ?",
-      [id]
-    );
+    const verifyResult = await db("subscription_plans").where("id", id).first();
     console.log("Verification query result:", verifyResult);
 
-    res.json({
-      success: true,
-      message: "Plan updated successfully",
-      debug: {
-        requestBody: req.body,
-        dbResult: result,
-        affectedRows: result.affectedRows,
-        verificationResult: verifyResult,
-      },
-    });
+    const normalizedPlan = normalizePlan(verifyResult);
+
+    res.success("Plan updated successfully", normalizedPlan);
   } catch (error) {
     console.error("Error updating plan:", error);
     res.status(500).json({
@@ -384,12 +266,16 @@ router.delete("/:id", async (req, res) => {
   try {
     const { id } = req.params;
 
-    const [result] = await pool.query(
-      "DELETE FROM subscription_plans WHERE id = ?",
-      [id]
-    );
+    // Check if plan exists first
+    const existingPlan = await db("subscription_plans").where("id", id).first();
+    if (!existingPlan) {
+      return res.fail(404, "Plan not found");
+    }
 
-    if (result.affectedRows === 0) {
+    // Delete using Knex
+    const affectedRows = await db("subscription_plans").where("id", id).delete();
+
+    if (affectedRows === 0) {
       return res.status(404).json({
         success: false,
         message: "Plan not found",
@@ -413,28 +299,16 @@ router.delete("/:id", async (req, res) => {
 router.get("/:id/settings", async (req, res) => {
   try {
     const { id } = req.params;
-    const [rows] = await pool.query(
-      "SELECT * FROM plan_settings WHERE plan_id = ?",
-      [id]
-    );
+    const settings = await db("plan_settings").where("plan_id", id).first();
 
-    if (rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Plan settings not found",
-      });
+    if (!settings) {
+      return res.fail(404, "Plan settings not found");
     }
 
-    res.json({
-      success: true,
-      data: rows[0],
-    });
+    res.success("Plan settings retrieved", settings);
   } catch (error) {
     console.error("Error fetching plan settings:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch plan settings",
-    });
+    res.fail(500, "Failed to fetch plan settings", { error: error.message });
   }
 });
 
@@ -452,10 +326,7 @@ router.post("/:id/settings", async (req, res) => {
       is_periodic,
     } = req.body;
 
-    const [existing] = await pool.query(
-      "SELECT * FROM plan_settings WHERE plan_id = ?",
-      [id]
-    );
+    const existing = await db("plan_settings").where("plan_id", id).first();
 
     const settingsData = {
       plan_id: id,
@@ -469,44 +340,13 @@ router.post("/:id/settings", async (req, res) => {
       updated_at: new Date(),
     };
 
-    if (existing.length > 0) {
-      await pool.query(
-        `UPDATE plan_settings 
-         SET is_free = ?, can_retake = ?, retake_period_days = ?, retake_limit = ?,
-             is_sequential = ?, is_progress_tracking = ?, is_periodic = ?, updated_at = ?
-         WHERE plan_id = ?`,
-        [
-          settingsData.is_free,
-          settingsData.can_retake,
-          settingsData.retake_period_days,
-          settingsData.retake_limit,
-          settingsData.is_sequential,
-          settingsData.is_progress_tracking,
-          settingsData.is_periodic,
-          settingsData.updated_at,
-          id,
-        ]
-      );
+    if (existing) {
+      // Update existing settings
+      await db("plan_settings").where("plan_id", id).update(settingsData);
     } else {
+      // Insert new settings
       settingsData.created_at = new Date();
-      await pool.query(
-        `INSERT INTO plan_settings 
-         (plan_id, is_free, can_retake, retake_period_days, retake_limit,
-          is_sequential, is_progress_tracking, is_periodic, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          settingsData.plan_id,
-          settingsData.is_free,
-          settingsData.can_retake,
-          settingsData.retake_period_days,
-          settingsData.retake_limit,
-          settingsData.is_sequential,
-          settingsData.is_progress_tracking,
-          settingsData.is_periodic,
-          settingsData.created_at,
-          settingsData.updated_at,
-        ]
-      );
+      await db("plan_settings").insert(settingsData);
     }
 
     res.json({
@@ -529,27 +369,20 @@ router.get("/:id/questionnaires", async (req, res) => {
     const { id } = req.params;
     console.log("Fetching plan questionnaires for plan:", id);
 
-    const [rows] = await pool.query(
-      `
-      SELECT 
-        pq.id as plan_questionnaire_id,
-        pq.questionnaire_id,
-        pq.sequence_order,
-        qc.title,
-        qc.description,
-        qc.status
-      FROM plan_questionnaires pq
-      JOIN questionnaire_config qc ON pq.questionnaire_id = qc.id
-      WHERE pq.plan_id = ?
-      ORDER BY pq.sequence_order ASC
-    `,
-      [id]
-    );
+    const rows = await db("plan_questionnaires as pq")
+      .select(
+        "pq.id as plan_questionnaire_id",
+        "pq.questionnaire_id",
+        "pq.sequence_order",
+        "qc.title",
+        "qc.description",
+        "qc.status"
+      )
+      .join("questionnaire_config as qc", "pq.questionnaire_id", "qc.id")
+      .where("pq.plan_id", id)
+      .orderBy("pq.sequence_order", "asc");
 
-    res.json({
-      success: true,
-      data: rows,
-    });
+    res.success("Plan questionnaires retrieved", rows);
   } catch (error) {
     console.error("Error fetching plan questionnaires:", error);
     res.status(500).json({
@@ -561,7 +394,7 @@ router.get("/:id/questionnaires", async (req, res) => {
 
 // Update questionnaires for a specific plan
 router.put("/:id/questionnaires", async (req, res) => {
-  const connection = await pool.getConnection();
+  const trx = await db.transaction();
 
   try {
     const { id } = req.params;
@@ -570,43 +403,27 @@ router.put("/:id/questionnaires", async (req, res) => {
     console.log("Updating plan questionnaires for plan:", id);
     console.log("Questionnaires data:", questionnaires);
 
-    await connection.beginTransaction();
-
     // First, delete existing plan questionnaires
-    await connection.query(
-      "DELETE FROM plan_questionnaires WHERE plan_id = ?",
-      [id]
-    );
+    await trx("plan_questionnaires").where("plan_id", id).delete();
 
     // Then, insert new questionnaires if any
     if (questionnaires && questionnaires.length > 0) {
-      for (let i = 0; i < questionnaires.length; i++) {
-        const questionnaire = questionnaires[i];
-        await connection.query(
-          `
-          INSERT INTO plan_questionnaires (plan_id, questionnaire_id, sequence_order)
-          VALUES (?, ?, ?)
-        `,
-          [id, questionnaire.id, questionnaire.sequence || i + 1]
-        );
-      }
+      const insertData = questionnaires.map((questionnaire, index) => ({
+        plan_id: id,
+        questionnaire_id: questionnaire.id,
+        sequence_order: questionnaire.sequence || index + 1,
+      }));
+
+      await trx("plan_questionnaires").insert(insertData);
     }
 
-    await connection.commit();
+    await trx.commit();
 
-    res.json({
-      success: true,
-      message: "Plan questionnaires updated successfully",
-    });
+    res.success("Plan questionnaires updated successfully");
   } catch (error) {
-    await connection.rollback();
+    await trx.rollback();
     console.error("Error updating plan questionnaires:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to update plan questionnaires",
-    });
-  } finally {
-    connection.release();
+    res.fail(500, "Failed to update plan questionnaires", { error: error.message });
   }
 });
 

@@ -1,5 +1,5 @@
 import express from "express";
-import { pool } from "../db.js";
+import { db } from "../config/knex.js";
 
 const router = express.Router();
 
@@ -27,16 +27,12 @@ router.post("/save-questionnaire-completion", async (req, res) => {
     }
 
     // Get user's current active subscription
-    const [currentSub] = await pool.query(
-      `
-      SELECT id as subscription_id, plan_id 
-      FROM user_subscriptions 
-      WHERE user_id = ? AND status = 'active' 
-      ORDER BY started_at DESC 
-      LIMIT 1
-    `,
-      [user_id]
-    );
+    const currentSub = await db("user_subscriptions")
+      .select("id as subscription_id", "plan_id")
+      .where("user_id", user_id)
+      .where("status", "active")
+      .orderBy("started_at", "desc")
+      .limit(1);
 
     if (currentSub.length === 0) {
       return res.status(400).json({
@@ -58,58 +54,52 @@ router.post("/save-questionnaire-completion", async (req, res) => {
     console.log(status);
     if (status === "draft") {
       // Check if a draft already exists
-      const [existingDraft] = await pool.query(
-        `SELECT id, version FROM questionnaire_responses 
-         WHERE user_id = ? AND subscription_id = ? AND questionnaire_id = ? AND status = 'draft'`,
-        [user_id, subscription_id, questionnaire_id]
-      );
+      const existingDraft = await db("questionnaire_responses")
+        .select("id", "version")
+        .where("user_id", user_id)
+        .where("subscription_id", subscription_id)
+        .where("questionnaire_id", questionnaire_id)
+        .where("status", "draft")
+        .first();
 
-      if (existingDraft.length > 0) {
+      if (existingDraft) {
         // Update existing draft
-        const newVersion = (existingDraft[0].version || 1) + 1;
-        await pool.query(
-          `UPDATE questionnaire_responses 
-           SET answers = ?, updated_at = ?, version = ?
-           WHERE id = ?`,
-          [
-            JSON.stringify(responses),
-            mysqlDatetime,
-            newVersion,
-            existingDraft[0].id,
-          ]
-        );
+        const newVersion = (existingDraft.version || 1) + 1;
+        await db("questionnaire_responses")
+          .where("id", existingDraft.id)
+          .update({
+            answers: JSON.stringify(responses),
+            updated_at: mysqlDatetime,
+            version: newVersion,
+          });
 
         return res.json({
           success: true,
           message: "Draft updated successfully",
-          id: existingDraft[0].id,
+          id: existingDraft.id,
           status: "draft",
           version: newVersion,
         });
       } else {
         // Create new draft
-        const [result] = await pool.query(
-          `INSERT INTO questionnaire_responses 
-           (user_id, subscription_id, questionnaire_id, answers, status, plan_id, attempt_number, created_at, updated_at, version) 
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            user_id,
-            subscription_id,
-            questionnaire_id,
-            JSON.stringify(responses),
-            "draft",
-            plan_id,
-            1, // Drafts always have attempt_number = 1
-            createdAtMysql,
-            mysqlDatetime,
-            1, // Initial version
-          ]
-        );
+        const result = await db("questionnaire_responses").insert({
+          user_id,
+          subscription_id,
+          questionnaire_id,
+          answers: JSON.stringify(responses),
+          status: "draft",
+          plan_id,
+          attempt_number: 1, // Drafts always have attempt_number = 1
+          created_at: createdAtMysql,
+          updated_at: mysqlDatetime,
+          version: 1, // Initial version
+        });
 
+        const insertedId = result[0];
         return res.json({
           success: true,
           message: "Draft saved successfully",
-          id: result.insertId,
+          id: insertedId,
           status: "draft",
           version: 1,
         });
@@ -117,47 +107,42 @@ router.post("/save-questionnaire-completion", async (req, res) => {
     } else {
       // Handle completed submission
       // Calculate attempt number for completed submissions
-      const [prevAttempts] = await pool.query(
-        `
-        SELECT COUNT(*) as count 
-        FROM questionnaire_responses 
-        WHERE user_id = ? AND subscription_id = ? AND questionnaire_id = ? AND status = 'completed'
-      `,
-        [user_id, subscription_id, questionnaire_id]
-      );
+      const prevAttempts = await db("questionnaire_responses")
+        .count("* as count")
+        .where("user_id", user_id)
+        .where("subscription_id", subscription_id)
+        .where("questionnaire_id", questionnaire_id)
+        .where("status", "completed")
+        .first();
 
-      const calculatedAttemptNumber = (prevAttempts[0]?.count || 0) + 1;
+      const calculatedAttemptNumber = (prevAttempts.count || 0) + 1;
 
       // Insert completed questionnaire
-      const [result] = await pool.query(
-        `INSERT INTO questionnaire_responses 
-         (user_id, subscription_id, questionnaire_id, answers, status, plan_id, attempt_number, completed_at, created_at, updated_at) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          user_id,
-          subscription_id,
-          questionnaire_id,
-          JSON.stringify(responses),
-          "completed",
-          plan_id,
-          calculatedAttemptNumber,
-          mysqlDatetime, // Set completed_at for completed status
-          createdAtMysql,
-          mysqlDatetime,
-        ]
-      );
+      const result = await db("questionnaire_responses").insert({
+        user_id,
+        subscription_id,
+        questionnaire_id,
+        answers: JSON.stringify(responses),
+        status: "completed",
+        plan_id,
+        attempt_number: calculatedAttemptNumber,
+        completed_at: mysqlDatetime, // Set completed_at for completed status
+        created_at: createdAtMysql,
+        updated_at: mysqlDatetime,
+      });
 
       // Optional: Delete any existing drafts after successful completion
-      await pool.query(
-        `DELETE FROM questionnaire_responses 
-         WHERE user_id = ? AND subscription_id = ? AND questionnaire_id = ? AND status = 'draft'`,
-        [user_id, subscription_id, questionnaire_id]
-      );
+      await db("questionnaire_responses")
+        .where("user_id", user_id)
+        .where("subscription_id", subscription_id)
+        .where("questionnaire_id", questionnaire_id)
+        .where("status", "draft")
+        .delete();
 
       return res.json({
         success: true,
         message: "Questionnaire completion saved successfully",
-        id: result.insertId,
+        id: result[0],
         attempt_number: calculatedAttemptNumber,
         status: "completed",
       });
@@ -179,37 +164,40 @@ router.get(
       const { user_id, questionnaire_id } = req.params;
 
       // Get user's current active subscription
-      const [currentSub] = await pool.query(
-        `SELECT id as subscription_id FROM user_subscriptions 
-       WHERE user_id = ? AND status = 'active' 
-       ORDER BY started_at DESC LIMIT 1`,
-        [user_id]
-      );
+      const currentSub = await db("user_subscriptions")
+        .select("id as subscription_id")
+        .where("user_id", user_id)
+        .where("status", "active")
+        .orderBy("started_at", "desc")
+        .limit(1)
+        .first();
 
-      if (currentSub.length === 0) {
+      if (!currentSub) {
         return res.json({ success: true, draft: null });
       }
 
-      const { subscription_id } = currentSub[0];
+      const { subscription_id } = currentSub;
 
       // Get draft if exists
-      const [draft] = await pool.query(
-        `SELECT id, answers, version, created_at, updated_at 
-       FROM questionnaire_responses 
-       WHERE user_id = ? AND subscription_id = ? AND questionnaire_id = ? AND status = 'draft'
-       ORDER BY updated_at DESC LIMIT 1`,
-        [user_id, subscription_id, questionnaire_id]
-      );
+      const draft = await db("questionnaire_responses")
+        .select("id", "answers", "version", "created_at", "updated_at")
+        .where("user_id", user_id)
+        .where("subscription_id", subscription_id)
+        .where("questionnaire_id", questionnaire_id)
+        .where("status", "draft")
+        .orderBy("updated_at", "desc")
+        .limit(1)
+        .first();
 
-      if (draft.length > 0) {
+      if (draft) {
         return res.json({
           success: true,
           draft: {
-            id: draft[0].id,
-            answers: JSON.parse(draft[0].answers),
-            version: draft[0].version,
-            created_at: draft[0].created_at,
-            updated_at: draft[0].updated_at,
+            id: draft.id,
+            answers: JSON.parse(draft.answers),
+            version: draft.version,
+            created_at: draft.created_at,
+            updated_at: draft.updated_at,
           },
         });
       } else {
@@ -237,23 +225,20 @@ router.get("/questionnaire-completions", async (req, res) => {
       });
     }
 
-    let query = "SELECT * FROM questionnaire_responses WHERE user_id = ?";
-    let params = [userId];
+    let query = db("questionnaire_responses").select("*").where("user_id", userId);
 
     // If subscriptionId is provided, filter by it (recommended for current subscription)
     if (subscriptionId) {
-      query += " AND subscription_id = ?";
-      params.push(subscriptionId);
+      query = query.where("subscription_id", subscriptionId);
     }
 
     if (questionnaireId) {
-      query += " AND questionnaire_id = ?";
-      params.push(questionnaireId);
+      query = query.where("questionnaire_id", questionnaireId);
     }
 
-    query += " ORDER BY created_at DESC";
+    query = query.orderBy("created_at", "desc");
 
-    const [rows] = await pool.query(query, params);
+    const rows = await query;
 
     res.json(rows);
   } catch (error) {

@@ -2,22 +2,108 @@ import express from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { v4 as uuidv4 } from "uuid";
-import { pool } from "../db.js";
+import { db } from "../config/knex.js";
 import passport from "../config/passport.js";
+import { appConfig } from "../config/app.js";
 
 import { sendPaymentNotificationEmail } from "../services/emailService.js";
 import AuthService from "../services/authService.js";
 import {
   authenticateToken,
   requireAdmin,
-  validateRegistration,
-  validateLogin,
 } from "../middleware/authMiddleware.js";
+import { authValidators } from "../middleware/validator.js";
 
-const JWT_SECRET = process.env.JWT_SECRET || "your-super-secret-jwt-key";
-const FRONTEND_URL = process.env.FRONTEND_URL;
+const {
+  security: { jwtSecret: JWT_SECRET },
+  server: { frontendUrl: FRONTEND_URL, backendUrl: BACKEND_URL },
+} = appConfig;
 
 const router = express.Router();
+
+const DEFAULT_FREE_PLAN = {
+  name: "Piano Gratuito",
+  description: "Accesso gratuito con funzionalità essenziali",
+  buttonText: "Inizia ora",
+  buttonVariant: "outline",
+  features: [
+    "1 progetto incluso",
+    "Report base",
+    "Supporto email standard",
+  ],
+};
+
+const uuidRegex =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+async function ensureDefaultFreePlan() {
+  const existing = await db("subscription_plans")
+    .select("id", "name", "is_free", "price")
+    .where("is_free", 1)
+    .orWhere("price", 0)
+    .orderBy("created_at", "asc")
+    .first();
+
+  if (existing.length > 0) {
+    return existing[0];
+  }
+
+  const planId = uuidv4();
+  await db("subscription_plans").insert({
+    id: planId,
+    name: DEFAULT_FREE_PLAN.name,
+    description: DEFAULT_FREE_PLAN.description,
+    price: 0,
+    interval: "month",
+    features: JSON.stringify(DEFAULT_FREE_PLAN.features),
+    is_popular: 0,
+    button_text: DEFAULT_FREE_PLAN.buttonText,
+    button_variant: DEFAULT_FREE_PLAN.buttonVariant,
+    created_at: db.fn.now(),
+    updated_at: db.fn.now(),
+    active: 1,
+    sort_order: 0,
+    is_free: 1,
+  });
+
+  return {
+    id: planId,
+    name: DEFAULT_FREE_PLAN.name,
+    is_free: 1,
+    price: 0,
+  };
+}
+
+async function getDefaultFreePlanId() {
+  const plan = await ensureDefaultFreePlan();
+  return plan.id;
+}
+
+async function resolvePlan(planIdentifier) {
+  if (!planIdentifier) {
+    return ensureDefaultFreePlan();
+  }
+
+  let planResult;
+  if (!uuidRegex.test(planIdentifier)) {
+    planResult = await db("subscription_plans")
+      .select("id", "name", "is_free", "price")
+      .where("name", planIdentifier)
+      .orWhere("id", planIdentifier)
+      .first();
+  } else {
+    planResult = await db("subscription_plans")
+      .select("id", "name", "is_free", "price")
+      .where("id", planIdentifier)
+      .first();
+  }
+
+  if (planResult.length > 0) {
+    return planResult[0];
+  }
+
+  return ensureDefaultFreePlan();
+}
 
 // Check if email exists endpoint
 router.post("/check-email", async (req, res) => {
@@ -32,10 +118,7 @@ router.post("/check-email", async (req, res) => {
     }
 
     // Check in profiles table (main user data) - this is where emails are stored
-    const [profileRows] = await pool.query(
-      "SELECT id FROM profiles WHERE email = ?",
-      [email]
-    );
+    const profileRows = await db("profiles").select("id").where("email", email);
 
     const emailExists = profileRows.length > 0;
 
@@ -58,7 +141,7 @@ router.post("/check-email", async (req, res) => {
 });
 
 // Register endpoint
-router.post("/register", validateRegistration, async (req, res) => {
+router.post("/register", authValidators.register, async (req, res) => {
   try {
     const { email, password, firstName, lastName, phone, address, fiscalCode } =
       req.body;
@@ -90,22 +173,18 @@ router.post("/register", validateRegistration, async (req, res) => {
 
 // Login endpoint
 // Login endpoint
-router.post("/login", validateLogin, async (req, res) => {
+router.post("/login", authValidators.login, async (req, res) => {
   try {
     const { email, password } = req.body;
 
     console.log("Login attempt:", { email });
 
     // First, get user profile to check auth provider
-    const [profiles] = await pool.execute(
-      `SELECT id, email, auth_provider, google_id, facebook_id, 
-              first_name, last_name, role 
-       FROM profiles 
-       WHERE email = ?`,
-      [email]
-    );
+    const profiles = await db("profiles")
+      .select("id", "email", "auth_provider", "google_id", "facebook_id", "first_name", "last_name", "role")
+      .where("email", email);
 
-    if (profiles.length === 0) {
+    if (!profiles || profiles.length === 0) {
       return res.status(401).json({
         success: false,
         message: "Credenziali non valide",
@@ -118,13 +197,12 @@ router.post("/login", validateLogin, async (req, res) => {
     // Check if this is an OAuth account
     if (profile.auth_provider === "google" && profile.google_id) {
       // Check if they have a password (might have linked accounts)
-      const [authRecords] = await pool.execute(
-        "SELECT password_hash FROM auth WHERE user_id = ?",
-        [profile.id]
-      );
+      const authRecords = await db("auth")
+        .select("password_hash")
+        .where("user_id", profile.id);
 
       const hasPassword =
-        authRecords.length > 0 && authRecords[0].password_hash;
+        authRecords && authRecords.length > 0 && authRecords[0].password_hash;
 
       if (!hasPassword) {
         return res.status(400).json({
@@ -138,13 +216,12 @@ router.post("/login", validateLogin, async (req, res) => {
     }
 
     if (profile.auth_provider === "facebook" && profile.facebook_id) {
-      const [authRecords] = await pool.execute(
-        "SELECT password_hash FROM auth WHERE user_id = ?",
-        [profile.id]
-      );
+      const authRecords = await db("auth")
+        .select("password_hash")
+        .where("user_id", profile.id);
 
       const hasPassword =
-        authRecords.length > 0 && authRecords[0].password_hash;
+        authRecords && authRecords.length > 0 && authRecords[0].password_hash;
 
       if (!hasPassword) {
         return res.status(400).json({
@@ -239,7 +316,7 @@ router.patch("/me", authenticateToken, async (req, res) => {
 });
 
 // Change password endpoint
-router.patch("/change-password", authenticateToken, async (req, res) => {
+router.patch("/change-password", authenticateToken, authValidators.changePassword, async (req, res) => {
   try {
     const userId = req.user.userId;
     const { newPassword } = req.body;
@@ -335,20 +412,10 @@ router.post("/register/complete-with-plan", async (req, res) => {
       });
     }
 
-    if (!planId) {
-      return res.status(400).json({
-        success: false,
-        message: "Plan selection is required",
-      });
-    }
-
     const { email, password, firstName, lastName, phone } = tempUserData;
 
     // Check if user already exists
-    const [existingUsers] = await pool.execute(
-      "SELECT id FROM profiles WHERE email = ?",
-      [email]
-    );
+    const existingUsers = await db("profiles").select("id").where("email", email);
 
     if (existingUsers.length > 0) {
       return res.status(400).json({
@@ -357,54 +424,8 @@ router.post("/register/complete-with-plan", async (req, res) => {
       });
     }
 
-    // Check if plan exists and get plan details
-    let planResult;
-    let finalPlanId = planId;
-
-    // First check if it's already a valid plan ID (UUID format)
-    const uuidRegex =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-    if (!uuidRegex.test(planId)) {
-      // It's a plan name, so we need to find the corresponding plan ID
-      try {
-        [planResult] = await pool.execute(
-          "SELECT id, name, is_free, price FROM subscription_plans WHERE name = ? OR id = ?",
-          [planId, planId]
-        );
-
-        if (planResult.length > 0) {
-          finalPlanId = planResult[0].id;
-          console.log(
-            "✅ Found complete-with-plan by name:",
-            planId,
-            "-> ID:",
-            finalPlanId
-          );
-        }
-      } catch (error) {
-        console.error("❌ Error finding complete-with-plan by name:", error);
-      }
-    } else {
-      // It's already a plan ID, just validate it
-      try {
-        [planResult] = await pool.execute(
-          "SELECT id, name, is_free, price FROM subscription_plans WHERE id = ?",
-          [planId]
-        );
-      } catch (error) {
-        console.error("❌ Error validating complete-with-plan ID:", error);
-      }
-    }
-
-    if (planResult.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid subscription plan selected",
-      });
-    }
-
-    const plan = planResult[0];
+    const plan = await resolvePlan(planId);
+    const finalPlanId = plan.id;
     const isFreeRegistration = plan.is_free || plan.price === 0;
 
     // Hash password
@@ -461,12 +482,13 @@ router.post("/register/complete-with-plan", async (req, res) => {
       // Check if welcome emails are enabled in settings before sending
       let shouldSendWelcomeEmail = true; // Default to true
       try {
-        const [settingsResult] = await pool.query(
-          "SELECT send_welcome_email FROM app_settings ORDER BY created_at DESC LIMIT 1"
-        );
-        if (settingsResult.length > 0) {
+        const settingsResult = await db("app_settings")
+          .select("send_welcome_email")
+          .orderBy("created_at", "desc")
+          .first();
+        if (settingsResult) {
           shouldSendWelcomeEmail = Boolean(
-            settingsResult[0].send_welcome_email
+            settingsResult.send_welcome_email
           );
         }
         console.log(
@@ -548,7 +570,7 @@ router.post("/register/complete-with-plan", async (req, res) => {
             firstName,
             lastName,
             phone,
-            planId,
+            planId: finalPlanId,
             planName: plan.name,
             isFree: isFreeRegistration,
           },
@@ -576,10 +598,10 @@ router.post("/register/complete-with-plan", async (req, res) => {
 router.get("/google", (req, res, next) => {
   console.log("========================================");
   console.log("🔵 Google OAuth Request Started");
-  console.log("🔵 BACKEND_URL:", process.env.BACKEND_URL);
+  console.log("🔵 BACKEND_URL:", BACKEND_URL);
   console.log(
     "🔵 Expected callback:",
-    `${process.env.BACKEND_URL}/api/auth/google/callback`
+    `${BACKEND_URL}/api/auth/google/callback`
   );
   console.log("========================================");
 
@@ -622,12 +644,19 @@ router.get(
         const newUserId = uuidv4();
 
         // Create new user account with free plan by default
-        await pool.execute(
-          `INSERT INTO profiles 
-           (id, email, first_name, last_name, google_id, auth_provider, subscription_plan, role, created_at, updated_at, last_activity) 
-           VALUES (?, ?, ?, ?, ?, 'google', 'free', 'user', NOW(), NOW(), NOW())`,
-          [newUserId, email, firstName, lastName, googleId]
-        );
+        await db("profiles").insert({
+          id: newUserId,
+          email,
+          first_name: firstName,
+          last_name: lastName,
+          google_id: googleId,
+          auth_provider: "google",
+          subscription_plan: "free",
+          role: "user",
+          created_at: db.fn.now(),
+          updated_at: db.fn.now(),
+          last_activity: db.fn.now(),
+        });
 
         console.log("✅ New user created with ID:", newUserId);
 
@@ -737,10 +766,9 @@ router.get(
       console.log("✅ Existing user login via Facebook:", user.email);
 
       // Update last activity
-      await pool.execute(
-        "UPDATE profiles SET last_activity = NOW() WHERE id = ?",
-        [user.id]
-      );
+      await db("profiles")
+        .where("id", user.id)
+        .update({ last_activity: db.fn.now() });
 
       // Generate JWT token
       const token = jwt.sign(
@@ -806,10 +834,10 @@ router.post("/register/google", async (req, res) => {
     const { email, firstName, lastName, googleId } = googleData;
 
     // Check if user already exists (to prevent duplicate registration)
-    const [existingUsers] = await pool.execute(
-      "SELECT id FROM profiles WHERE email = ? OR google_id = ?",
-      [email, googleId]
-    );
+    const existingUsers = await db("profiles")
+      .select("id")
+      .where("email", email)
+      .orWhere("google_id", googleId);
 
     if (existingUsers.length > 0) {
       return res.status(400).json({
@@ -825,17 +853,15 @@ router.post("/register/google", async (req, res) => {
     let finalPlanId = subscription_plan;
 
     if (subscription_plan) {
-      const uuidRegex =
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
       if (!uuidRegex.test(subscription_plan)) {
         try {
-          const [planResult] = await pool.execute(
-            "SELECT id FROM subscription_plans WHERE name = ? OR id = ?",
-            [subscription_plan, subscription_plan]
-          );
+          const planResult = await db("subscription_plans")
+            .select("id")
+            .where("name", subscription_plan)
+            .orWhere("id", subscription_plan)
+            .first();
 
-          if (planResult.length > 0) {
+          if (planResult) {
             finalPlanId = planResult[0].id;
             console.log(
               "✅ Found plan by name:",
@@ -944,11 +970,12 @@ router.post("/register/google", async (req, res) => {
           let actualPlanPrice = 0;
 
           try {
-            const [planDetails] = await pool.query(
-              "SELECT price FROM subscription_plans WHERE name = ? OR id = ?",
-              [planName, planName]
-            );
-            if (planDetails.length > 0) {
+            const planDetails = await db("subscription_plans")
+              .select("price")
+              .where("name", planName)
+              .orWhere("id", planName)
+              .first();
+            if (planDetails) {
               actualPlanPrice = planDetails[0].price;
             }
           } catch (error) {
@@ -1030,10 +1057,10 @@ router.post("/register/facebook", async (req, res) => {
     const { email, firstName, lastName, facebookId } = facebookData;
 
     // Check if user already exists
-    const [existingUsers] = await pool.execute(
-      "SELECT id FROM profiles WHERE email = ? OR facebook_id = ?",
-      [email, facebookId]
-    );
+    const existingUsers = await db("profiles")
+      .select("id")
+      .where("email", email)
+      .orWhere("facebook_id", facebookId);
 
     if (existingUsers.length > 0) {
       return res.status(400).json({
@@ -1051,12 +1078,13 @@ router.post("/register/facebook", async (req, res) => {
 
       if (!uuidRegex.test(subscription_plan)) {
         try {
-          const [planResult] = await pool.execute(
-            "SELECT id FROM subscription_plans WHERE name = ? OR id = ?",
-            [subscription_plan, subscription_plan]
-          );
+          const planResult = await db("subscription_plans")
+            .select("id")
+            .where("name", subscription_plan)
+            .orWhere("id", subscription_plan)
+            .first();
 
-          if (planResult.length > 0) {
+          if (planResult) {
             finalPlanId = planResult[0].id;
           } else {
             finalPlanId = await getDefaultFreePlanId();
@@ -1144,11 +1172,12 @@ router.post("/register/facebook", async (req, res) => {
           let actualPlanPrice = 0;
 
           try {
-            const [planDetails] = await pool.query(
-              "SELECT price FROM subscription_plans WHERE name = ? OR id = ?",
-              [planName, planName]
-            );
-            if (planDetails.length > 0) {
+            const planDetails = await db("subscription_plans")
+              .select("price")
+              .where("name", planName)
+              .orWhere("id", planName)
+              .first();
+            if (planDetails) {
               actualPlanPrice = planDetails[0].price;
             }
           } catch (error) {
@@ -1220,7 +1249,7 @@ router.post("/register-with-plan", async (req, res) => {
     // Validate required fields - password is NOT required for OAuth users
     const isOAuthUser = authProvider && (googleId || facebookId);
 
-    if (!email || !firstName || !lastName || !planId) {
+    if (!email || !firstName || !lastName) {
       return res.status(400).json({
         success: false,
         message: "Missing required fields for registration-with-plan",
@@ -1236,10 +1265,7 @@ router.post("/register-with-plan", async (req, res) => {
     }
 
     // Check if user already exists
-    const [existingUsers] = await pool.execute(
-      "SELECT id FROM profiles WHERE email = ?",
-      [email]
-    );
+    const existingUsers = await db("profiles").select("id").where("email", email);
     if (existingUsers.length > 0) {
       return res.status(400).json({
         success: false,
@@ -1247,39 +1273,8 @@ router.post("/register-with-plan", async (req, res) => {
       });
     }
 
-    // Validate planId and get plan details
-    let planResult;
-    let finalPlanId = planId;
-    const uuidRegex =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-    if (!uuidRegex.test(planId)) {
-      [planResult] = await pool.execute(
-        "SELECT id, name, is_free, price FROM subscription_plans WHERE name = ? OR id = ?",
-        [planId, planId]
-      );
-      if (planResult.length > 0) {
-        finalPlanId = planResult[0].id;
-      } else {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid plan selected",
-        });
-      }
-    } else {
-      [planResult] = await pool.execute(
-        "SELECT id, name, is_free, price FROM subscription_plans WHERE id = ?",
-        [planId]
-      );
-      if (planResult.length === 0) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid plan selected",
-        });
-      }
-    }
-
-    const plan = planResult[0];
+    const plan = await resolvePlan(planId);
+    const finalPlanId = plan.id;
     if (!plan.is_free && plan.price > 0) {
       return res.status(400).json({
         success: false,
@@ -1312,18 +1307,18 @@ router.post("/register-with-plan", async (req, res) => {
       // ✅ FIXED: Removed email_verified - only 9 values for 9 columns
       await connection.execute(
         `INSERT INTO profiles 
-         (id, email, first_name, last_name, phone, full_name, google_id, facebook_id, auth_provider, created_at, updated_at) 
+         (id, email, first_name, last_name, full_name, phone, google_id, facebook_id, auth_provider, created_at, updated_at) 
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
         [
-          userId, // id
-          email, // email
-          firstName, // first_name
-          lastName, // last_name
-          phone || null, // phone
-          `${firstName} ${lastName}`, // full_name
-          googleId || null, // google_id
-          facebookId || null, // facebook_id
-          authProvider || "email", // auth_provider
+          userId,
+          email,
+          firstName,
+          lastName,
+          `${firstName} ${lastName}`,
+          phone || null,
+          googleId || null,
+          facebookId || null,
+          authProvider || "email",
         ]
       );
 
@@ -1392,12 +1387,12 @@ router.post("/register-with-plan", async (req, res) => {
 // Cleanup expired temporary registrations
 router.delete("/cleanup-expired-registrations", async (req, res) => {
   try {
-    const [result] = await pool.execute(
-      "DELETE FROM temp_registrations WHERE expires_at < NOW()"
-    );
+    const affectedRows = await db("temp_registrations")
+      .where("expires_at", "<", db.fn.now())
+      .delete();
 
     console.log(
-      `🧹 Cleaned up ${result.affectedRows} expired temporary registrations`
+      `🧹 Cleaned up ${affectedRows} expired temporary registrations`
     );
 
     res.json({

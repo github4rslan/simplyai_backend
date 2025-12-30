@@ -7,12 +7,21 @@ app.post("/:id", async (req, res) => {
   const { id } = req.params;
   const { title, content } = req.body;
 
-  await pool.query(
-    "INSERT INTO pages (id, title, content) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE title = VALUES(title), content = VALUES(content)",
-    [id, title, content]
-  );
+  try {
+    // Convert content to JSON string if needed
+    const contentJson = typeof content === 'string' ? JSON.stringify(content) : JSON.stringify(content);
+    const slug = id; // Use id as slug if not provided
 
-  res.json({ success: true });
+    await pool.query(
+      "INSERT INTO pages (id, title, slug, content) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE title = VALUES(title), content = VALUES(content)",
+      [id, title, slug, contentJson]
+    );
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Error creating/updating page:", error);
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 // Fetch page content
@@ -23,12 +32,30 @@ app.get("/:id", async (req, res) => {
     const [rows] = await pool.query("SELECT * FROM pages WHERE id = ?", [id]);
 
     if (rows.length === 0) {
-      return res.status(404).json({ error: "Page not found" });
+      // Return empty content instead of 404 to allow frontend to use fallback
+      return res.json({ 
+        data: { 
+          id, 
+          title: id.charAt(0).toUpperCase() + id.slice(1), 
+          content: "" 
+        } 
+      });
     }
 
-    console.log(rows[0]);
+    const page = rows[0];
+    
+    // Handle JSON content field - parse if it's a JSON string
+    if (page.content && typeof page.content === 'string') {
+      try {
+        page.content = JSON.parse(page.content);
+      } catch (e) {
+        // If parsing fails, keep as string
+      }
+    }
 
-    res.json({ data: rows[0] }); // wrap in {data: ...} so frontend works
+    console.log("Page fetched:", page.id);
+
+    res.json({ data: page }); // wrap in {data: ...} so frontend works
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Server error" });
@@ -54,9 +81,11 @@ app.put("/:id", async (req, res) => {
     if (existing.length > 0) {
       // Update existing page
       console.log("Updating existing page with ID:", id);
+      // Convert content to JSON string if needed
+      const contentJson = typeof content === 'string' ? JSON.stringify(content) : JSON.stringify(content);
       const [result] = await pool.query(
         "UPDATE pages SET title = ?, content = ? WHERE id = ?",
-        [title, content, id]
+        [title, contentJson, id]
       );
       console.log("Update result:", result);
       console.log("Rows affected:", result.affectedRows);
@@ -67,9 +96,12 @@ app.put("/:id", async (req, res) => {
     } else {
       // Insert new page
       console.log("Inserting new page with ID:", id);
+      // Convert content to JSON string if needed
+      const contentJson = typeof content === 'string' ? JSON.stringify(content) : JSON.stringify(content);
+      const slug = id; // Use id as slug if not provided
       const [result] = await pool.query(
-        "INSERT INTO pages (id, title, content) VALUES (?, ?, ?)",
-        [id, title, content]
+        "INSERT INTO pages (id, title, slug, content) VALUES (?, ?, ?, ?)",
+        [id, title, slug, contentJson]
       );
       console.log("Insert result:", result);
     }

@@ -1,28 +1,29 @@
 import mysql from "mysql2/promise";
-import dotenv from "dotenv";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
+import { appConfig } from "./config/app.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-// Load .env file from the backend directory
-dotenv.config({ path: join(__dirname, ".env") });
+const {
+  host,
+  user,
+  password,
+  name,
+  port,
+  connectionLimit,
+} = appConfig.database;
 
 console.log("🔧 Database configuration:");
-console.log("- DB_HOST:", process.env.DB_HOST);
-console.log("- DB_USER:", process.env.DB_USER);
-console.log("- DB_PASSWORD:", process.env.DB_PASSWORD ? "[SET]" : "[NOT SET]");
-console.log("- DB_NAME:", process.env.DB_NAME);
-console.log("- DB_PORT:", process.env.DB_PORT);
+console.log("- DB_HOST:", host);
+console.log("- DB_USER:", user);
+console.log("- DB_PASSWORD:", password ? "[SET]" : "[NOT SET]");
+console.log("- DB_NAME:", name);
+console.log("- DB_PORT:", port);
 
 export const pool = mysql.createPool({
-  host: process.env.DB_HOST,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
-  port: process.env.DB_PORT || 3306,
+  host,
+  user,
+  password,
+  database: name,
+  port,
   waitForConnections: true,
-  connectionLimit: 10,
+  connectionLimit,
   queueLimit: 0,
 });

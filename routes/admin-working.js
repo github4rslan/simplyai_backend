@@ -1,24 +1,8 @@
 import express from "express";
-import mysql from "mysql2/promise";
-import dotenv from "dotenv";
 import bcrypt from "bcryptjs";
 import { v4 as uuidv4 } from "uuid";
+import { db } from "../config/knex.js";
 import { sendDeadlineReminderEmail } from "../services/emailService.js";
-
-// Load environment variables
-dotenv.config();
-
-// Create database pool with explicit configuration
-const dbPool = mysql.createPool({
-  host: process.env.DB_HOST,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
-  port: process.env.DB_PORT || 3306,
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0,
-});
 
 const router = express.Router();
 
@@ -34,26 +18,26 @@ router.get("/users", tempRequireAdmin, async (req, res) => {
     console.log("Admin fetching users from database...");
 
     // Query to get all users with their profile information
-    const [users] = await dbPool.execute(`
-      SELECT 
-        p.id,
-        p.email,
-        p.full_name,
-        p.first_name,
-        p.last_name,
-        p.role,
-        p.created_at,
-        p.updated_at as last_login
-      FROM profiles p
-      ORDER BY 
+    const users = await db("profiles as p")
+      .select(
+        "p.id",
+        "p.email",
+        "p.full_name",
+        "p.first_name",
+        "p.last_name",
+        "p.role",
+        "p.created_at",
+        db.raw("p.updated_at as last_login")
+      )
+      .orderByRaw(`
         CASE 
           WHEN p.role = 'administrator' THEN 1
           WHEN p.role = 'premium_user' THEN 2
           WHEN p.role = 'user' THEN 3
           ELSE 4
-        END,
-        p.created_at DESC
-    `);
+        END
+      `)
+      .orderBy("p.created_at", "desc");
 
     console.log(`Found ${users.length} users in database`);
 
@@ -78,10 +62,9 @@ router.delete("/users/:id", tempRequireAdmin, async (req, res) => {
     console.log(`Admin attempting to delete user ${userId}`);
 
     // Check if user exists and is not an administrator
-    const [existingUsers] = await dbPool.execute(
-      "SELECT role FROM profiles WHERE id = ?",
-      [userId]
-    );
+    const existingUsers = await db("profiles")
+      .select("role")
+      .where("id", userId);
 
     if (existingUsers.length === 0) {
       return res.status(404).json({
@@ -98,28 +81,24 @@ router.delete("/users/:id", tempRequireAdmin, async (req, res) => {
     }
 
     // Start transaction
-    const connection = await dbPool.getConnection();
-    await connection.beginTransaction();
+    const trx = await db.transaction();
 
     try {
       // Delete from auth table first (foreign key constraint)
-      await connection.execute("DELETE FROM auth WHERE user_id = ?", [userId]);
+      await trx("auth").where("user_id", userId).delete();
 
       // Delete user subscriptions if table exists
       try {
-        await connection.execute(
-          "DELETE FROM user_subscriptions WHERE user_id = ?",
-          [userId]
-        );
+        await trx("user_subscriptions").where("user_id", userId).delete();
       } catch (err) {
         // Table might not exist, continue
         console.log("user_subscriptions table might not exist, continuing...");
       }
 
       // Delete user from profiles
-      await connection.execute("DELETE FROM profiles WHERE id = ?", [userId]);
+      await trx("profiles").where("id", userId).delete();
 
-      await connection.commit();
+      await trx.commit();
       console.log(`User ${userId} deleted successfully`);
 
       res.json({
@@ -127,10 +106,8 @@ router.delete("/users/:id", tempRequireAdmin, async (req, res) => {
         message: "Utente eliminato con successo",
       });
     } catch (error) {
-      await connection.rollback();
+      await trx.rollback();
       throw error;
-    } finally {
-      connection.release();
     }
   } catch (error) {
     console.error("Error deleting user:", error);
@@ -160,10 +137,9 @@ router.put("/users/:id/role", tempRequireAdmin, async (req, res) => {
     }
 
     // Check if user exists
-    const [existingUsers] = await dbPool.execute(
-      "SELECT id FROM profiles WHERE id = ?",
-      [userId]
-    );
+    const existingUsers = await db("profiles")
+      .select("id")
+      .where("id", userId);
 
     if (existingUsers.length === 0) {
       return res.status(404).json({
@@ -173,10 +149,9 @@ router.put("/users/:id/role", tempRequireAdmin, async (req, res) => {
     }
 
     // Update user role
-    await dbPool.execute("UPDATE profiles SET role = ? WHERE id = ?", [
-      role,
-      userId,
-    ]);
+    await db("profiles")
+      .where("id", userId)
+      .update({ role });
 
     console.log(`User ${userId} role updated to ${role} successfully`);
 
@@ -206,17 +181,18 @@ router.get(
       );
 
       // Get all users with their active subscriptions
-      const [users] = await dbPool.execute(`
-      SELECT 
-        p.id as user_id,
-        us.id as subscription_id,
-        us.plan_id,
-        sp.name as plan_name
-      FROM profiles p
-      LEFT JOIN user_subscriptions us ON p.id = us.user_id AND us.status = 'active'
-      LEFT JOIN subscription_plans sp ON us.plan_id = sp.id
-      ORDER BY p.created_at DESC
-    `);
+      const users = await db("profiles as p")
+        .select(
+          "p.id as user_id",
+          "us.id as subscription_id",
+          "us.plan_id",
+          "sp.name as plan_name"
+        )
+        .leftJoin("user_subscriptions as us", function() {
+          this.on("p.id", "=", "us.user_id").andOn("us.status", "=", db.raw("'active'"));
+        })
+        .leftJoin("subscription_plans as sp", "us.plan_id", "sp.id")
+        .orderBy("p.created_at", "desc");
 
       const progressData = {};
 
@@ -235,29 +211,21 @@ router.get(
 
         try {
           // Get total questionnaires for this plan
-          const [totalQuestionnaireCount] = await dbPool.execute(
-            `
-          SELECT COUNT(*) as total
-          FROM plan_questionnaires pq
-          WHERE pq.plan_id = ?
-        `,
-            [user.plan_id]
-          );
+          const totalQuestionnaireCount = await db("plan_questionnaires as pq")
+            .count("* as total")
+            .where("pq.plan_id", user.plan_id)
+            .first();
 
-          const totalQuestionnaires = totalQuestionnaireCount[0].total;
+          const totalQuestionnaires = totalQuestionnaireCount.total;
 
           // Get completed questionnaires for this user and plan
-          const [completedQuestionnaireCount] = await dbPool.execute(
-            `
-          SELECT COUNT(DISTINCT qr.questionnaire_id) as completed
-          FROM questionnaire_responses qr
-          WHERE qr.user_id = ? 
-            AND qr.plan_id = ? 
-            AND qr.status = 'completed'
-            AND qr.completed_at IS NOT NULL
-        `,
-            [user.user_id, user.plan_id]
-          );
+          const completedQuestionnaireCount = await db("questionnaire_responses as qr")
+            .countDistinct("qr.questionnaire_id as completed")
+            .where("qr.user_id", user.user_id)
+            .where("qr.plan_id", user.plan_id)
+            .where("qr.status", "completed")
+            .whereNotNull("qr.completed_at")
+            .first();
 
           const completedQuestionnaires =
             completedQuestionnaireCount[0].completed;
@@ -315,17 +283,13 @@ router.get(
       );
 
       // Get user's active subscription and plan
-      const [subscriptions] = await dbPool.execute(
-        `
-      SELECT us.id as subscription_id, us.plan_id, sp.name as plan_name
-      FROM user_subscriptions us
-      LEFT JOIN subscription_plans sp ON us.plan_id = sp.id
-      WHERE us.user_id = ? AND us.status = 'active'
-      ORDER BY us.created_at DESC
-      LIMIT 1
-    `,
-        [userId]
-      );
+      const subscriptions = await db("user_subscriptions as us")
+        .select("us.id as subscription_id", "us.plan_id", "sp.name as plan_name")
+        .leftJoin("subscription_plans as sp", "us.plan_id", "sp.id")
+        .where("us.user_id", userId)
+        .where("us.status", "active")
+        .orderBy("us.created_at", "desc")
+        .limit(1);
 
       if (subscriptions.length === 0) {
         return res.json({
@@ -342,31 +306,23 @@ router.get(
       const subscription = subscriptions[0];
 
       // Get total questionnaires assigned to this plan
-      const [totalQuestionnaireCount] = await dbPool.execute(
-        `
-      SELECT COUNT(*) as total
-      FROM plan_questionnaires pq
-      WHERE pq.plan_id = ?
-    `,
-        [subscription.plan_id]
-      );
+      const totalQuestionnaireCount = await db("plan_questionnaires as pq")
+        .count("* as total")
+        .where("pq.plan_id", subscription.plan_id)
+        .first();
 
-      const totalQuestionnaires = totalQuestionnaireCount[0].total;
+      const totalQuestionnaires = totalQuestionnaireCount.total;
 
       // Get completed questionnaires for this user and plan
-      const [completedQuestionnaireCount] = await dbPool.execute(
-        `
-      SELECT COUNT(DISTINCT qr.questionnaire_id) as completed
-      FROM questionnaire_responses qr
-      WHERE qr.user_id = ? 
-        AND qr.plan_id = ? 
-        AND qr.status = 'completed'
-        AND qr.completed_at IS NOT NULL
-    `,
-        [userId, subscription.plan_id]
-      );
+      const completedQuestionnaireCount = await db("questionnaire_responses as qr")
+        .countDistinct("qr.questionnaire_id as completed")
+        .where("qr.user_id", userId)
+        .where("qr.plan_id", subscription.plan_id)
+        .where("qr.status", "completed")
+        .whereNotNull("qr.completed_at")
+        .first();
 
-      const completedQuestionnaires = completedQuestionnaireCount[0].completed;
+      const completedQuestionnaires = completedQuestionnaireCount.completed;
       const percentage =
         totalQuestionnaires > 0
           ? (completedQuestionnaires / totalQuestionnaires) * 100
@@ -405,22 +361,18 @@ router.get("/users/:id", tempRequireAdmin, async (req, res) => {
     console.log(`Admin fetching details for user ${userId}`);
 
     // Query to get user details with profile info
-    const [users] = await dbPool.execute(
-      `
-      SELECT 
-        p.id,
-        p.email,
-        p.full_name,
-        p.first_name,
-        p.last_name,
-        p.role,
-        p.created_at,
-        p.updated_at as last_login
-      FROM profiles p
-      WHERE p.id = ?
-    `,
-      [userId]
-    );
+    const users = await db("profiles as p")
+      .select(
+        "p.id",
+        "p.email",
+        "p.full_name",
+        "p.first_name",
+        "p.last_name",
+        "p.role",
+        "p.created_at",
+        db.raw("p.updated_at as last_login")
+      )
+      .where("p.id", userId);
 
     if (users.length === 0) {
       return res.status(404).json({
@@ -480,10 +432,9 @@ router.post("/users", tempRequireAdmin, async (req, res) => {
     }
 
     // Check if user already exists
-    const [existingUsers] = await dbPool.execute(
-      "SELECT id FROM profiles WHERE email = ?",
-      [email]
-    );
+    const existingUsers = await db("profiles")
+      .select("id")
+      .where("email", email);
 
     if (existingUsers.length > 0) {
       return res.status(409).json({
@@ -493,8 +444,7 @@ router.post("/users", tempRequireAdmin, async (req, res) => {
     }
 
     // Start transaction
-    const connection = await dbPool.getConnection();
-    await connection.beginTransaction();
+    const trx = await db.transaction();
 
     try {
       // Generate UUID for user
@@ -502,58 +452,64 @@ router.post("/users", tempRequireAdmin, async (req, res) => {
       const hashedPassword = await bcrypt.hash(password, 12);
 
       // Create user profile
-      await connection.execute(
-        `INSERT INTO profiles (id, email, first_name, last_name, full_name, role, created_at, updated_at) 
-         VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())`,
-        [userId, email, firstName, lastName, `${firstName} ${lastName}`, role]
-      );
+      await trx("profiles").insert({
+        id: userId,
+        email,
+        first_name: firstName,
+        last_name: lastName,
+        full_name: `${firstName} ${lastName}`,
+        role,
+        created_at: db.fn.now(),
+        updated_at: db.fn.now(),
+      });
 
       // Create auth record
-      await connection.execute(
-        "INSERT INTO auth (user_id, password_hash, created_at, updated_at) VALUES (?, ?, NOW(), NOW())",
-        [userId, hashedPassword]
-      );
+      await trx("auth").insert({
+        user_id: userId,
+        password_hash: hashedPassword,
+        created_at: db.fn.now(),
+        updated_at: db.fn.now(),
+      });
 
       // Add subscription if provided
       if (subscription_plan) {
-        await connection.execute(
-          "INSERT INTO user_subscriptions (id, user_id, plan_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, NOW(), NOW())",
-          [uuidv4(), userId, subscription_plan, "active"]
-        );
+        await trx("user_subscriptions").insert({
+          id: uuidv4(),
+          user_id: userId,
+          plan_id: subscription_plan,
+          status: "active",
+          created_at: db.fn.now(),
+          updated_at: db.fn.now(),
+        });
       }
 
-      await connection.commit();
+      await trx.commit();
 
       console.log(`User ${userId} created successfully by admin`);
 
       // Return created user data
-      const [newUser] = await dbPool.execute(
-        `
-        SELECT 
-          p.id,
-          p.email,
-          p.full_name,
-          p.first_name,
-          p.last_name,
-          p.role,
-          p.created_at,
-          p.updated_at as last_login
-        FROM profiles p
-        WHERE p.id = ?
-      `,
-        [userId]
-      );
+      const newUser = await db("profiles as p")
+        .select(
+          "p.id",
+          "p.email",
+          "p.full_name",
+          "p.first_name",
+          "p.last_name",
+          "p.role",
+          "p.created_at",
+          db.raw("p.updated_at as last_login")
+        )
+        .where("p.id", userId)
+        .first();
 
       res.status(201).json({
         success: true,
         message: "Utente creato con successo",
-        data: newUser[0],
+        data: newUser,
       });
     } catch (error) {
-      await connection.rollback();
+      await trx.rollback();
       throw error;
-    } finally {
-      connection.release();
     }
   } catch (error) {
     console.error("Error creating user:", error);
@@ -566,31 +522,41 @@ router.post("/users", tempRequireAdmin, async (req, res) => {
 });
 router.get("/users/incomplete-plans", tempRequireAdmin, async (req, res) => {
   try {
-    const [users] = await dbPool.execute(`
-      SELECT DISTINCT
-        p.id,
-        p.email,
-        p.full_name,
-        p.first_name,
-        p.last_name,
-        up.plan_id,
-        pl.name as plan_name,
-        up.created_at as plan_start_date,
-        COUNT(DISTINCT pq.questionnaire_id) as total_questionnaires,
-        COUNT(DISTINCT uqr.questionnaire_id) as completed_questionnaires,
-        (COUNT(DISTINCT uqr.questionnaire_id) * 100.0 / NULLIF(COUNT(DISTINCT pq.questionnaire_id), 0)) as completion_percentage
-      FROM profiles p
-      INNER JOIN user_plans up ON p.id = up.user_id
-      INNER JOIN plans pl ON up.plan_id = pl.id
-      INNER JOIN plan_questionnaires pq ON pl.id = pq.plan_id
-      LEFT JOIN user_questionnaire_responses uqr ON p.id = uqr.user_id 
-        AND pq.questionnaire_id = uqr.questionnaire_id
-        AND uqr.completed = true
-      WHERE up.completed = false
-      GROUP BY p.id, p.email, p.full_name, p.first_name, p.last_name, up.plan_id, pl.name, up.created_at
-      HAVING completion_percentage < 100 OR completion_percentage IS NULL
-      ORDER BY completion_percentage ASC, up.created_at ASC
-    `);
+    const users = await db("profiles as p")
+      .select(
+        "p.id",
+        "p.email",
+        "p.full_name",
+        "p.first_name",
+        "p.last_name",
+        "up.plan_id",
+        db.raw("pl.name as plan_name"),
+        db.raw("up.created_at as plan_start_date"),
+        db.raw("COUNT(DISTINCT pq.questionnaire_id) as total_questionnaires"),
+        db.raw("COUNT(DISTINCT uqr.questionnaire_id) as completed_questionnaires"),
+        db.raw("(COUNT(DISTINCT uqr.questionnaire_id) * 100.0 / NULLIF(COUNT(DISTINCT pq.questionnaire_id), 0)) as completion_percentage")
+      )
+      .innerJoin("user_plans as up", "p.id", "up.user_id")
+      .innerJoin("plans as pl", "up.plan_id", "pl.id")
+      .innerJoin("plan_questionnaires as pq", "pl.id", "pq.plan_id")
+      .leftJoin("user_questionnaire_responses as uqr", function() {
+        this.on("p.id", "=", "uqr.user_id")
+          .andOn("pq.questionnaire_id", "=", "uqr.questionnaire_id")
+          .andOn("uqr.completed", "=", db.raw("true"));
+      })
+      .where("up.completed", false)
+      .groupBy(
+        "p.id",
+        "p.email",
+        "p.full_name",
+        "p.first_name",
+        "p.last_name",
+        "up.plan_id",
+        "pl.name",
+        "up.created_at"
+      )
+      .havingRaw("completion_percentage < 100 OR completion_percentage IS NULL")
+      .orderByRaw("completion_percentage ASC, up.created_at ASC");
 
     res.json({
       success: true,
@@ -624,32 +590,29 @@ router.post(
       }
 
       // Get user details with their incomplete plans
-      const placeholders = userIds.map(() => "?").join(",");
-      const [users] = await dbPool.execute(
-        `
-        SELECT 
-          p.id,
-          p.email,
-          p.full_name,
-          p.first_name,
-          p.last_name,
-          sp.name as plan_name,
-          COUNT(DISTINCT pq.questionnaire_id) as total_questionnaires,
-          COUNT(DISTINCT CASE WHEN qr.completed_at IS NOT NULL THEN qr.questionnaire_id END) as completed_questionnaires,
-          (COUNT(DISTINCT pq.questionnaire_id) - COUNT(DISTINCT CASE WHEN qr.completed_at IS NOT NULL THEN qr.questionnaire_id END)) as remaining_questionnaires
-        FROM profiles p
-        INNER JOIN user_subscriptions us ON p.id = us.user_id
-        INNER JOIN subscription_plans sp ON us.plan_id = sp.id
-        INNER JOIN plan_questionnaires pq ON sp.id = pq.plan_id
-        LEFT JOIN questionnaire_responses qr ON p.id = qr.user_id 
-          AND pq.questionnaire_id = qr.questionnaire_id
-        WHERE p.id IN (${placeholders})
-          AND us.status = 'active'
-        GROUP BY p.id, p.email, p.full_name, p.first_name, p.last_name, sp.name
-        HAVING remaining_questionnaires > 0
-        `,
-        userIds
-      );
+      const users = await db("profiles as p")
+        .select(
+          "p.id",
+          "p.email",
+          "p.full_name",
+          "p.first_name",
+          "p.last_name",
+          db.raw("sp.name as plan_name"),
+          db.raw("COUNT(DISTINCT pq.questionnaire_id) as total_questionnaires"),
+          db.raw("COUNT(DISTINCT CASE WHEN qr.completed_at IS NOT NULL THEN qr.questionnaire_id END) as completed_questionnaires"),
+          db.raw("(COUNT(DISTINCT pq.questionnaire_id) - COUNT(DISTINCT CASE WHEN qr.completed_at IS NOT NULL THEN qr.questionnaire_id END)) as remaining_questionnaires")
+        )
+        .innerJoin("user_subscriptions as us", "p.id", "us.user_id")
+        .innerJoin("subscription_plans as sp", "us.plan_id", "sp.id")
+        .innerJoin("plan_questionnaires as pq", "sp.id", "pq.plan_id")
+        .leftJoin("questionnaire_responses as qr", function() {
+          this.on("p.id", "=", "qr.user_id")
+            .andOn("pq.questionnaire_id", "=", "qr.questionnaire_id");
+        })
+        .whereIn("p.id", userIds)
+        .where("us.status", "active")
+        .groupBy("p.id", "p.email", "p.full_name", "p.first_name", "p.last_name", "sp.name")
+        .havingRaw("remaining_questionnaires > 0");
 
       console.log(`Found ${users.length} users with incomplete plans`);
 

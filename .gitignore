@@ -25,3 +25,7 @@ dist-ssr
 *.sw?
 backend/uploads
 backend/.env
+
+# Local assets/secrets
+uploads
+uploads/**

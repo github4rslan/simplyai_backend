@@ -89,14 +89,13 @@ router.post('/logo', logoUpload.single('file'), async (req, res) => {
     }
 
     // Construct URL for the uploaded file
-    const protocol = req.protocol;
-    const host = req.get('host') || 'localhost:4000';
-    const fileUrl = `${protocol}://${host}/${req.file.filename}`;
+    // Use relative path that works with static file serving from root
+    const fileUrl = `/${req.file.filename}`;
     
     // Update database with new logo path
     try {
       await pool.execute(
-        `UPDATE app_settings SET logo = ? WHERE id = 1`,
+        `UPDATE app_settings SET logo = ?, updated_at = NOW() WHERE id = 1`,
         [fileUrl]
       );
       console.log('Logo path updated in database:', fileUrl);
@@ -104,14 +103,33 @@ router.post('/logo', logoUpload.single('file'), async (req, res) => {
       console.error('Database update error:', dbError);
       // Continue anyway, file is uploaded
     }
+
+    let cacheKey = Date.now();
+    try {
+      const [[settingsRow]] = await pool.query(
+        "SELECT UNIX_TIMESTAMP(updated_at) AS updated_at_ts FROM app_settings WHERE id = 1"
+      );
+      if (settingsRow?.updated_at_ts) {
+        cacheKey = Math.round(settingsRow.updated_at_ts * 1000);
+      }
+    } catch (timestampError) {
+      console.error("Failed to read updated_at for logo cache key:", timestampError);
+    }
     
     console.log('Logo uploaded successfully:', fileUrl);
     
+    res.set({
+      "Cache-Control": "no-store, no-cache, must-revalidate",
+      Pragma: "no-cache",
+      Expires: "0",
+    });
+
     res.json({
       success: true,
       data: {
         filename: req.file.filename,
-        url: fileUrl
+        url: fileUrl,
+        cacheKey
       }
     });
   } catch (error) {
@@ -138,9 +156,8 @@ router.post('/favicon', logoUpload.single('file'), async (req, res) => {
     }
 
     // Construct URL for the uploaded file
-    const protocol = req.protocol;
-    const host = req.get('host') || 'localhost:4000';
-    const fileUrl = `${protocol}://${host}/${req.file.filename}`;
+    // Use relative URL that works with static file serving
+    const fileUrl = `/${req.file.filename}`;
     
     // Also create a copy as favicon.ico for browser fallback
     const faviconPath = path.join(__dirname, '../../public/favicon.ico');
@@ -156,7 +173,7 @@ router.post('/favicon', logoUpload.single('file'), async (req, res) => {
     // Update database with new favicon path
     try {
       await pool.execute(
-        `UPDATE app_settings SET favicon = ? WHERE id = 1`,
+        `UPDATE app_settings SET favicon = ?, updated_at = NOW() WHERE id = 1`,
         [fileUrl]
       );
       console.log('Favicon path updated in database:', fileUrl);
@@ -165,13 +182,42 @@ router.post('/favicon', logoUpload.single('file'), async (req, res) => {
       // Continue anyway, file is uploaded
     }
     
-    console.log('Favicon uploaded successfully:', fileUrl);
+    let cacheKey = Date.now();
+    try {
+      const [[settingsRow]] = await pool.query(
+        "SELECT UNIX_TIMESTAMP(updated_at) AS updated_at_ts FROM app_settings WHERE id = 1"
+      );
+      if (settingsRow?.updated_at_ts) {
+        cacheKey = Math.round(settingsRow.updated_at_ts * 1000);
+      }
+    } catch (timestampError) {
+      console.error("Failed to read updated_at for favicon cache key:", timestampError);
+    }
     
+    console.log('Favicon uploaded successfully:', fileUrl);
+    try {
+      const [[settingsRow]] = await pool.query(
+        "SELECT UNIX_TIMESTAMP(updated_at) AS updated_at_ts FROM app_settings WHERE id = 1"
+      );
+      if (settingsRow?.updated_at_ts) {
+        cacheKey = Math.round(settingsRow.updated_at_ts * 1000);
+      }
+    } catch (timestampError) {
+      console.error("Failed to read updated_at for favicon cache key:", timestampError);
+    }
+
+    res.set({
+      "Cache-Control": "no-store, no-cache, must-revalidate",
+      Pragma: "no-cache",
+      Expires: "0",
+    });
+
     res.json({
       success: true,
       data: {
         filename: req.file.filename,
-        url: fileUrl
+        url: fileUrl,
+        cacheKey
       }
     });
   } catch (error) {

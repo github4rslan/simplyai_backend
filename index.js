@@ -2,11 +2,12 @@ import forgotPasswordRouter from "./routes/auth-forgot-password.js";
 import resetPasswordRouter from "./routes/auth-reset-password.js";
 import express from "express";
 import cors from "cors";
-import dotenv from "dotenv";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
 import passport from "./config/passport.js";
+import { appConfig } from "./config/app.js";
+import { corsOptions, allowedOrigins } from "./config/cors.js";
 import authRoutes from "./routes/auth_clean.js";
 import formRoutes from "./routes/forms.js";
 import uploadRoutes from "./routes/upload.js";
@@ -28,15 +29,24 @@ import reportsRoutes from "./routes/reports.js";
 import usersRoutes from "./routes/users.js";
 import pageData from "./routes/pages.js";
 import imageUpload from "./routes/imageUpload.js";
-
-dotenv.config();
+import healthRoutes from "./routes/health.js";
+import { requestLogger } from "./middleware/requestLogger.js";
+import { responseFormatter } from "./middleware/responseFormatter.js";
+import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 
 const app = express();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-app.use(cors());
+console.log("🌍 Environment:", appConfig.env.mode);
+console.log("🔗 Backend URL:", appConfig.server.backendUrl);
+console.log("🚦 Allowed CORS origins:", allowedOrigins);
+
+app.use(requestLogger);
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 app.use(express.json());
+app.use(responseFormatter);
 
 // Register the password reset routes after app is initialized and middleware is set up
 app.use("/api/auth", forgotPasswordRouter);
@@ -51,10 +61,24 @@ app.use(express.static("public"));
 app.use(passport.initialize());
 
 // Serve uploaded files statically
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+app.use("/uploads", express.static(path.join(__dirname, "../simplyai-FE/dist")));
 
-// Serve public files (logos, favicons) statically
-app.use(express.static(path.join(__dirname, "../public")));
+// Serve public files (logos, favicons) statically with cache headers
+app.use("/", express.static(path.join(__dirname, "../public"), {
+  setHeaders: (res, filePath) => {
+    // Add cache-busting headers for logo and favicon files
+    if (filePath.includes("logo") || filePath.includes("favicon")) {
+      res.set({
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        Pragma: "no-cache",
+        Expires: "0",
+      });
+    }
+  }
+}));
+
+// Serve frontend build files statically
+app.use(express.static(path.join(__dirname, "../simplyai-FE/dist")));
 
 // Special handling for favicon.ico with no-cache headers
 app.get("/favicon.ico", (req, res) => {
@@ -78,6 +102,7 @@ app.get("/favicon.ico", (req, res) => {
 // Image upload route for page Editor
 app.use("/api/upload", imageUpload);
 
+app.use("/api/health", healthRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/forms", formRoutes);
@@ -100,10 +125,13 @@ app.use("/api/reports", reportsRoutes);
 app.use("/api/users", usersRoutes);
 
 app.get(/^\/(?!api).*/, (req, res) => {
-  res.sendFile(path.join(__dirname, "../index.html"));
+  res.sendFile(path.join(__dirname, "../simplyai-FE/dist/index.html"));
 });
 
-const PORT = process.env.PORT || 4000;
+app.use(notFoundHandler);
+app.use(errorHandler);
+
+const PORT = appConfig.server.port || 4000;
 app.listen(PORT, () => {
   console.log(`Backend server running on port ${PORT}`);
   console.log("Prompt templates API added");

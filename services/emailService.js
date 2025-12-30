@@ -1,7 +1,7 @@
 // --- Password Reset Email ---
 export async function sendResetPasswordEmail(to, resetUrl) {
   const mailOptions = {
-    from: process.env.GMAIL_EMAIL || process.env.BREVO_EMAIL,
+    from: DEFAULT_SENDER,
     to,
     subject: "Reset your password",
     html: `<p>Click <a href="${resetUrl}">here</a> to reset your password. This link will expire in 1 hour.</p>`,
@@ -59,9 +59,15 @@ export async function sendResetPasswordEmail(to, resetUrl) {
 }
 
 import nodemailer from "nodemailer";
-import dotenv from "dotenv";
+import { appConfig } from "../config/app.js";
 
-dotenv.config();
+const {
+  email: { gmail, brevo },
+  server: { frontendUrl },
+} = appConfig;
+
+const DEFAULT_SENDER = gmail.address || brevo.address || "no-reply@simplyai.it";
+const FRONTEND_URL = frontendUrl || "http://localhost:8081";
 
 // Create transporter with Gmail SMTP (priority) or Brevo as fallback
 let transporter;
@@ -70,12 +76,12 @@ let emailProvider = "";
 
 try {
   // Try Gmail SMTP first (recommended)
-  if (process.env.GMAIL_EMAIL && process.env.GMAIL_APP_PASSWORD) {
+  if (gmail.address && gmail.appPassword) {
     transporter = nodemailer.createTransport({
       service: "gmail",
       auth: {
-        user: process.env.GMAIL_EMAIL,
-        pass: process.env.GMAIL_APP_PASSWORD,
+        user: gmail.address,
+        pass: gmail.appPassword,
       },
     });
     emailProvider = "Gmail";
@@ -83,14 +89,14 @@ try {
     emailEnabled = true;
   }
   // Fallback to Brevo if Gmail not configured
-  else if (process.env.BREVO_EMAIL && process.env.BREVO_API_KEY) {
+  else if (brevo.address && brevo.apiKey) {
     transporter = nodemailer.createTransport({
       host: "smtp-relay.brevo.com",
       port: 587,
       secure: false,
       auth: {
-        user: process.env.BREVO_EMAIL,
-        pass: process.env.BREVO_API_KEY,
+        user: brevo.address,
+        pass: brevo.apiKey,
       },
     });
     emailProvider = "Brevo";
@@ -185,7 +191,7 @@ export const sendPaymentNotificationEmail = async (
       };
     }
 
-    const senderEmail = process.env.GMAIL_EMAIL || process.env.BREVO_EMAIL;
+    const senderEmail = DEFAULT_SENDER;
     const mailOptions = {
       from: `"SimolyAI" <${senderEmail}>`,
       to: userInfo.email,
@@ -399,7 +405,7 @@ const generatePaymentNotificationTemplate = (
           
           <div style="text-align: center;">
             <a href="${
-              process.env.FRONTEND_URL || "http://localhost:8081"
+              FRONTEND_URL
             }/dashboard" class="cta-button">
               Accedi alla Dashboard
             </a>
@@ -421,10 +427,10 @@ const generatePaymentNotificationTemplate = (
           <p>
             © 2024 SimolyAI. Tutti i diritti riservati.<br>
             <a href="${
-              process.env.FRONTEND_URL || "http://localhost:8081"
+              FRONTEND_URL
             }/privacy-policy">Privacy Policy</a> | 
             <a href="${
-              process.env.FRONTEND_URL || "http://localhost:8081"
+              FRONTEND_URL
             }/terms-of-service">Termini di Servizio</a>
           </p>
         </div>
@@ -497,7 +503,7 @@ export const sendDeadlineReminderEmail = async ({
       };
     }
 
-    const senderEmail = process.env.GMAIL_EMAIL || process.env.BREVO_EMAIL;
+    const senderEmail = DEFAULT_SENDER;
     const mailOptions = {
       from: `"SimolyAI" <${senderEmail}>`,
       to: email,
@@ -620,7 +626,7 @@ const generateDeadlineReminderTemplate = ({
           
           <div style="text-align: center;">
             <a href="${
-              process.env.FRONTEND_URL || "http://localhost:8081"
+              FRONTEND_URL
             }/dashboard" class="cta-button">
               Vai al Dashboard →
             </a>
@@ -642,10 +648,10 @@ const generateDeadlineReminderTemplate = ({
           <p>
             © 2024 SimolyAI. Tutti i diritti riservati.<br>
             <a href="${
-              process.env.FRONTEND_URL || "http://localhost:8081"
+              FRONTEND_URL
             }/privacy-policy">Privacy Policy</a> | 
             <a href="${
-              process.env.FRONTEND_URL || "http://localhost:8081"
+              FRONTEND_URL
             }/terms-of-service">Termini di Servizio</a>
           </p>
           <p style="color: #95a5a6; font-size: 12px; margin-top: 15px;">

@@ -86,17 +86,27 @@ const createTables = async () => {
     await connection.execute(`
       CREATE TABLE IF NOT EXISTS profiles (
         id CHAR(36) NOT NULL,
+        email VARCHAR(255) NOT NULL,
         first_name VARCHAR(255) NULL,
         last_name VARCHAR(255) NULL,
+        full_name VARCHAR(255) NULL,
         address TEXT NULL,
         fiscal_code VARCHAR(50) NULL,
         phone VARCHAR(20) NULL,
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        auth_provider VARCHAR(50) NOT NULL DEFAULT 'email',
+        google_id VARCHAR(255) NULL,
+        facebook_id VARCHAR(255) NULL,
         subscription_plan VARCHAR(255) NULL,
         subscription_expiry TIMESTAMP NULL,
         role VARCHAR(50) NULL DEFAULT 'user',
-        PRIMARY KEY (id)
+        is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+        last_activity TIMESTAMP NULL DEFAULT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        UNIQUE KEY unique_email (email),
+        UNIQUE KEY unique_google_id (google_id),
+        UNIQUE KEY unique_facebook_id (facebook_id)
       ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
     `);
     console.log('✅ profiles table created');

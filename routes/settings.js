@@ -1,19 +1,17 @@
 import express from "express";
-import { pool } from "../db.js";
+import { db } from "../config/knex.js";
 
 const router = express.Router();
 
 // GET /api/settings
 router.get("/", async (req, res) => {
   try {
-    const [rows] = await pool.query(
-      "SELECT * FROM app_settings ORDER BY created_at DESC LIMIT 1"
-    );
+    const rows = await db("app_settings")
+      .orderBy("created_at", "desc")
+      .limit(1);
     if (rows.length === 0) {
       console.log("⚠️ No app settings found in database");
-      return res
-        .status(404)
-        .json({ success: false, message: "App settings not found" });
+      return res.fail(404, "App settings not found");
     }
 
     console.log("📖 LOADING notification settings from database:");
@@ -22,26 +20,23 @@ router.get("/", async (req, res) => {
     console.log("  Email in Report:", rows[0].send_email_in_report);
     console.log("  Admin Notification:", rows[0].send_admin_notification);
 
-    res.json({ success: true, data: rows[0] });
+    return res.success("App settings fetched", rows[0]);
   } catch (error) {
     console.error("Error fetching app settings:", error);
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to fetch app settings" });
+    return res.fail(500, "Failed to fetch app settings", error.message);
   }
 });
 
 // get 3 main colors
 router.get("/colorProfiles", async (req, res) => {
   try {
-    const [rows] = await pool.query(
-      "SELECT primary_color, secondary_color, accent_color FROM app_settings ORDER BY created_at DESC LIMIT 1"
-    );
+    const rows = await db("app_settings")
+      .select("primary_color", "secondary_color", "accent_color")
+      .orderBy("created_at", "desc")
+      .limit(1);
     if (rows.length === 0) {
       console.log("⚠️ No app settings found in database");
-      return res
-        .status(404)
-        .json({ success: false, message: "App settings not found" });
+      return res.fail(404, "App settings not found");
     }
 
     console.log("📖 LOADING color profile settings from database:");
@@ -49,12 +44,10 @@ router.get("/colorProfiles", async (req, res) => {
     console.log("  Secondary Color:", rows[0].secondary_color);
     console.log("  Accent Color:", rows[0].accent_color);
 
-    res.json({ success: true, data: rows[0] });
+    return res.success("Color profiles fetched", rows[0]);
   } catch (error) {
     console.error("Error fetching app settings:", error);
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to fetch app settings" });
+    return res.fail(500, "Failed to fetch app settings", error.message);
   }
 });
 
@@ -109,22 +102,12 @@ router.put("/", async (req, res) => {
       stripe_secret_key ? "Present" : "Not provided"
     );
 
-    const [existing] = await pool.query("SELECT id FROM app_settings LIMIT 1");
-    if (existing.length > 0) {
+    const existing = await db("app_settings").select("id").limit(1).first();
+    if (existing) {
       console.log("✏️ UPDATING existing settings in database...");
-      const result = await pool.query(
-        `
-        UPDATE app_settings SET 
-          site_name = ?, site_description = ?, contact_email = ?, site_url = ?,
-          logo = ?, favicon = ?, primary_color = ?, secondary_color = ?, accent_color = ?,
-          font_family = ?, font_size = ?, button_style = ?, enable_registration = ?,
-          require_email_verification = ?, max_storage_per_user = ?,
-          send_welcome_email = ?, send_completion_email = ?, send_email_in_report = ?, send_admin_notification = ?,
-          enable_payments = ?, currency = ?, vat_percentage = ?, stripe_public_key = ?, stripe_secret_key = ?,
-          updated_at = NOW()
-        WHERE id = ?
-      `,
-        [
+      const affectedRows = await db("app_settings")
+        .where("id", existing.id)
+        .update({
           site_name,
           site_description,
           contact_email,
@@ -149,79 +132,73 @@ router.put("/", async (req, res) => {
           vat_percentage,
           stripe_public_key,
           stripe_secret_key,
-          existing[0].id,
-        ]
-      );
-      console.log(
-        "✅ UPDATE completed. Affected rows:",
-        result[0].affectedRows
-      );
+          updated_at: db.fn.now(),
+        });
+      console.log("✅ UPDATE completed. Affected rows:", affectedRows);
     } else {
       console.log("➕ INSERTING new settings in database...");
-      const result = await pool.query(
-        `
-        INSERT INTO app_settings (
-          site_name, site_description, contact_email, site_url, logo, favicon,
-          primary_color, secondary_color, accent_color, font_family, font_size,
-          button_style, enable_registration, require_email_verification, max_storage_per_user,
-          send_welcome_email, send_completion_email, send_email_in_report, send_admin_notification,
-          enable_payments, currency, vat_percentage, stripe_public_key, stripe_secret_key
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-        [
-          site_name,
-          site_description,
-          contact_email,
-          site_url,
-          logo,
-          favicon,
-          primary_color,
-          secondary_color,
-          accent_color,
-          font_family,
-          font_size,
-          button_style,
-          enable_registration,
-          require_email_verification,
-          max_storage_per_user,
-          send_welcome_email,
-          send_completion_email,
-          send_email_in_report,
-          send_admin_notification,
-          enable_payments,
-          currency,
-          vat_percentage,
-          stripe_public_key,
-          stripe_secret_key,
-        ]
-      );
-      console.log("✅ INSERT completed. Insert ID:", result[0].insertId);
+      await db("app_settings").insert({
+        site_name,
+        site_description,
+        contact_email,
+        site_url,
+        logo,
+        favicon,
+        primary_color,
+        secondary_color,
+        accent_color,
+        font_family,
+        font_size,
+        button_style,
+        enable_registration,
+        require_email_verification,
+        max_storage_per_user,
+        send_welcome_email,
+        send_completion_email,
+        send_email_in_report,
+        send_admin_notification,
+        enable_payments,
+        currency,
+        vat_percentage,
+        stripe_public_key,
+        stripe_secret_key,
+        created_at: db.fn.now(),
+        updated_at: db.fn.now(),
+      });
+      console.log("✅ INSERT completed.");
     }
 
     // Verify the notification settings were saved
-    const [verification] = await pool.query(
-      "SELECT send_welcome_email, send_completion_email, send_email_in_report, send_admin_notification, currency, enable_payments FROM app_settings ORDER BY created_at DESC LIMIT 1"
-    );
+    const verification = await db("app_settings")
+      .select(
+        "send_welcome_email",
+        "send_completion_email",
+        "send_email_in_report",
+        "send_admin_notification",
+        "currency",
+        "enable_payments"
+      )
+      .orderBy("created_at", "desc")
+      .limit(1)
+      .first();
 
-    if (verification.length > 0) {
+    if (verification) {
       console.log("🔍 VERIFICATION - Current settings in database:");
-      console.log("  Welcome Email:", verification[0].send_welcome_email);
-      console.log("  Completion Email:", verification[0].send_completion_email);
-      console.log("  Email in Report:", verification[0].send_email_in_report);
+      console.log("  Welcome Email:", verification.send_welcome_email);
+      console.log("  Completion Email:", verification.send_completion_email);
+      console.log("  Email in Report:", verification.send_email_in_report);
       console.log(
         "  Admin Notification:",
-        verification[0].send_admin_notification
+        verification.send_admin_notification
       );
-      console.log("  Currency:", verification[0].currency);
-      console.log("  Enable Payments:", verification[0].enable_payments);
+      console.log("  Currency:", verification.currency);
+      console.log("  Enable Payments:", verification.enable_payments);
     }
 
-    res.json({ success: true, message: "App settings updated successfully" });
+    return res.success("App settings updated successfully");
   } catch (error) {
     console.error("Error updating app settings:", error);
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to update app settings" });
+    return res.fail(500, "Failed to update app settings", error.message);
   }
 });
 

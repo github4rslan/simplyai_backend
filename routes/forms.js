@@ -1,6 +1,6 @@
 import express from "express";
-import { pool } from "../db.js";
-import { authenticateToken } from "./auth.js";
+import { db } from "../config/knex.js";
+import { authenticateToken } from "../middleware/authMiddleware.js";
 import { v4 as uuidv4 } from "uuid";
 
 const router = express.Router();
@@ -36,28 +36,20 @@ router.post("/", async (req, res) => {
     if (id) {
       // Update existing form
       console.log("Updating existing form with ID:", id);
-      const [result] = await pool.query(
-        `UPDATE questionnaire_config 
-         SET title = ?, 
-             description = ?, 
-             questions = ?, 
-             logo = ?, 
-             status = ?, 
-             updated_at = NOW()
-         WHERE id = ?`,
-        [
+      const affectedRows = await db("questionnaire_config")
+        .where("id", id)
+        .update({
           title,
-          description || null,
-          JSON.stringify(surveyJSON),
-          logo || null,
-          status || "draft",
-          id,
-        ]
-      );
+          description: description || null,
+          questions: JSON.stringify(surveyJSON),
+          logo: logo || null,
+          status: status || "draft",
+          updated_at: db.fn.now(),
+        });
 
-      console.log("Update result:", result);
+      console.log("Update result - affected rows:", affectedRows);
 
-      if (result.affectedRows === 0) {
+      if (affectedRows === 0) {
         return res.status(404).json({
           success: false,
           message: "Form not found for update",
@@ -75,20 +67,17 @@ router.post("/", async (req, res) => {
       const newId = uuidv4();
       console.log("Creating new form with UUID:", newId);
 
-      const [result] = await pool.query(
-        `INSERT INTO questionnaire_config 
-         (id, title, description, questions, logo, status, created_by, created_at, updated_at) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
-        [
-          newId,
-          title,
-          description || null,
-          JSON.stringify(surveyJSON),
-          logo || null,
-          status || "draft",
-          createdBy || null,
-        ]
-      );
+      await db("questionnaire_config").insert({
+        id: newId,
+        title,
+        description: description || null,
+        questions: JSON.stringify(surveyJSON),
+        logo: logo || null,
+        status: status || "draft",
+        created_by: createdBy || null,
+        created_at: db.fn.now(),
+        updated_at: db.fn.now(),
+      });
 
       console.log("Form created successfully with ID:", newId);
 
@@ -110,18 +99,16 @@ router.post("/", async (req, res) => {
 router.get("/", async (req, res) => {
   try {
     const { status } = req.query;
-    let query = "SELECT * FROM questionnaire_config";
-    let params = [];
+    let query = db("questionnaire_config").select("*");
 
     if (status) {
-      query += " WHERE status = ?";
-      params.push(status);
+      query = query.where("status", status);
     }
 
-    query += " ORDER BY created_at DESC";
+    query = query.orderBy("created_at", "desc");
 
-    console.log("Executing query:", query, "with params:", params);
-    const [rows] = await pool.query(query, params);
+    console.log("Executing query with Knex");
+    const rows = await query;
     console.log("Query result rows:", rows.length);
 
     // Parse the JSON questions for each form
@@ -176,15 +163,13 @@ router.get("/user-questionnaires", authenticateToken, async (req, res) => {
     console.log("Fetching questionnaires for user:", userId);
 
     // Get user's active subscription
-    const [userSubscriptions] = await pool.query(
-      `SELECT us.plan_id, sp.name as plan_name 
-       FROM user_subscriptions us
-       JOIN subscription_plans sp ON us.plan_id = sp.id
-       WHERE us.user_id = ? AND us.status = 'active'
-       ORDER BY us.created_at DESC 
-       LIMIT 1`,
-      [userId]
-    );
+    const userSubscriptions = await db("user_subscriptions as us")
+      .select("us.plan_id", "sp.name as plan_name")
+      .join("subscription_plans as sp", "us.plan_id", "sp.id")
+      .where("us.user_id", userId)
+      .where("us.status", "active")
+      .orderBy("us.created_at", "desc")
+      .limit(1);
 
     if (userSubscriptions.length === 0) {
       console.log("No active subscription found for user:", userId);
@@ -199,22 +184,22 @@ router.get("/user-questionnaires", authenticateToken, async (req, res) => {
     console.log("User plan:", userPlan);
 
     // Get questionnaires associated with the user's plan
-    const [questionnaires] = await pool.query(
-      `SELECT 
-         qc.id,
-         qc.title,
-         qc.description,
-         qc.status,
-         qc.logo,
-         qc.created_at,
-         qc.updated_at,
-         pq.sequence_order
-       FROM questionnaire_config qc
-       JOIN plan_questionnaires pq ON qc.id = pq.questionnaire_id
-       WHERE pq.plan_id = ? AND qc.status = 'published'
-       ORDER BY pq.sequence_order ASC, qc.created_at DESC`,
-      [userPlan.plan_id]
-    );
+    const questionnaires = await db("questionnaire_config as qc")
+      .select(
+        "qc.id",
+        "qc.title",
+        "qc.description",
+        "qc.status",
+        "qc.logo",
+        "qc.created_at",
+        "qc.updated_at",
+        "pq.sequence_order"
+      )
+      .join("plan_questionnaires as pq", "qc.id", "pq.questionnaire_id")
+      .where("pq.plan_id", userPlan.plan_id)
+      .where("qc.status", "published")
+      .orderBy("pq.sequence_order", "asc")
+      .orderBy("qc.created_at", "desc");
 
     console.log(
       `Found ${questionnaires.length} questionnaires for plan:`,
@@ -244,30 +229,26 @@ router.get("/user-subscription", authenticateToken, async (req, res) => {
     const userId = req.user.userId;
 
     // 1) Fetch the most recent active subscription
-    const [subs] = await pool.execute(
-      `
-        SELECT
-          us.id               AS subscription_id,
-          us.user_id,
-          us.plan_id,
-          us.started_at,
-          us.expires_at,
-          us.status,
-          sp.name             AS plan_name,
-          sp.description      AS plan_description,
-          sp.price,
-          sp.is_free,
-          sp.plan_type,
-          sp.features
-        FROM user_subscriptions AS us
-        JOIN subscription_plans   AS sp ON us.plan_id = sp.id
-        WHERE us.user_id = ? 
-          AND us.status = 'active'
-        ORDER BY us.started_at DESC
-        LIMIT 1
-        `,
-      [userId]
-    );
+    const subs = await db("user_subscriptions as us")
+      .select(
+        "us.id as subscription_id",
+        "us.user_id",
+        "us.plan_id",
+        "us.started_at",
+        "us.expires_at",
+        "us.status",
+        "sp.name as plan_name",
+        "sp.description as plan_description",
+        "sp.price",
+        "sp.is_free",
+        "sp.plan_type",
+        "sp.features"
+      )
+      .join("subscription_plans as sp", "us.plan_id", "sp.id")
+      .where("us.user_id", userId)
+      .where("us.status", "active")
+      .orderBy("us.started_at", "desc")
+      .limit(1);
 
     if (subs.length === 0) {
       return res
@@ -290,22 +271,17 @@ router.get("/user-subscription", authenticateToken, async (req, res) => {
     }
 
     // 2) Optionally fetch questionnaires for this plan
-    const [questions] = await pool.execute(
-      `
-        SELECT
-          pq.questionnaire_id AS id,
-          qc.title            AS name,
-          qc.description,
-          pq.sequence_order
-        FROM plan_questionnaires AS pq
-        JOIN questionnaire_config AS qc
-          ON pq.questionnaire_id = qc.id
-        WHERE pq.plan_id = ?
-          AND qc.status = 'published'
-        ORDER BY pq.sequence_order ASC
-        `,
-      [subscription.plan_id]
-    );
+    const questions = await db("plan_questionnaires as pq")
+      .select(
+        "pq.questionnaire_id as id",
+        "qc.title as name",
+        "qc.description",
+        "pq.sequence_order"
+      )
+      .join("questionnaire_config as qc", "pq.questionnaire_id", "qc.id")
+      .where("pq.plan_id", subscription.plan_id)
+      .where("qc.status", "published")
+      .orderBy("pq.sequence_order", "asc");
 
     // 3) Shape and return
     res.json({
@@ -344,10 +320,8 @@ router.get("/user-subscription", authenticateToken, async (req, res) => {
 // Get single form by ID
 router.get("/:id", async (req, res) => {
   try {
-    const [rows] = await pool.query(
-      "SELECT * FROM questionnaire_config WHERE id = ?",
-      [req.params.id]
-    );
+    const rows = await db("questionnaire_config")
+      .where("id", req.params.id);
 
     if (rows.length === 0) {
       return res.status(404).json({
@@ -399,10 +373,8 @@ router.get("/:id/guide/:questionName", async (req, res) => {
   const { id, questionName } = req.params;
   try {
     // Fetch the form
-    const [rows] = await pool.query(
-      "SELECT * FROM questionnaire_config WHERE id = ?",
-      [id]
-    );
+    const rows = await db("questionnaire_config")
+      .where("id", id);
     if (rows.length === 0) {
       return res
         .status(404)
@@ -467,10 +439,9 @@ router.delete("/:id", async (req, res) => {
 
   try {
     // Check if form exists first
-    const [checkRows] = await pool.query(
-      "SELECT id, title FROM questionnaire_config WHERE id = ?",
-      [id]
-    );
+    const checkRows = await db("questionnaire_config")
+      .select("id", "title")
+      .where("id", id);
 
     if (checkRows.length === 0) {
       console.log("Form not found for deletion:", id);
@@ -484,14 +455,13 @@ router.delete("/:id", async (req, res) => {
     console.log("Found form to delete:", formTitle);
 
     // Delete the form
-    const [result] = await pool.query(
-      "DELETE FROM questionnaire_config WHERE id = ?",
-      [id]
-    );
+    const affectedRows = await db("questionnaire_config")
+      .where("id", id)
+      .delete();
 
-    console.log("Delete result:", result);
+    console.log("Delete result - affected rows:", affectedRows);
 
-    if (result.affectedRows === 0) {
+    if (affectedRows === 0) {
       return res.status(404).json({
         success: false,
         message: "Form not found or already deleted",

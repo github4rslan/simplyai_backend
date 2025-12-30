@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
 import { pool } from '../db.js';
 import { sendPaymentNotificationEmail } from '../services/emailService.js';
+import { authenticateToken } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
@@ -392,3 +393,70 @@ router.post('/process-oauth-payment', async (req, res) => {
 });
 
 export default router;
+
+// Subscribe to a free plan for an already logged-in user
+router.post('/subscribe-free', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { planId } = req.body;
+
+    if (!planId) {
+      return res.status(400).json({ success: false, message: 'planId is required' });
+    }
+
+    // Validate plan is free
+    const [plans] = await pool.query(
+      'SELECT id, name, is_free, price FROM subscription_plans WHERE id = ? LIMIT 1',
+      [planId]
+    );
+
+    if (plans.length === 0) {
+      return res.status(404).json({ success: false, message: 'Plan not found' });
+    }
+
+    const plan = plans[0];
+    if (!(plan.is_free || plan.price === 0)) {
+      return res.status(400).json({ success: false, message: 'Selected plan is not free' });
+    }
+
+    // Deactivate existing active subscriptions for the user
+    await pool.query(
+      "UPDATE user_subscriptions SET status = 'canceled' WHERE user_id = ? AND status = 'active'",
+      [userId]
+    );
+
+    // Create or reactivate subscription
+    const [existing] = await pool.query(
+      "SELECT id FROM user_subscriptions WHERE user_id = ? AND plan_id = ? LIMIT 1",
+      [userId, planId]
+    );
+
+    if (existing.length > 0) {
+      await pool.query(
+        "UPDATE user_subscriptions SET status = 'active', started_at = NOW(), updated_at = NOW() WHERE id = ?",
+        [existing[0].id]
+      );
+    } else {
+      await pool.query(
+        "INSERT INTO user_subscriptions (id, user_id, plan_id, status, started_at, created_at, updated_at) VALUES (?, ?, ?, 'active', NOW(), NOW(), NOW())",
+        [uuidv4(), userId, planId]
+      );
+    }
+
+    return res.json({
+      success: true,
+      message: 'Free plan activated',
+      data: {
+        planId: plan.id,
+        planName: plan.name,
+      },
+    });
+  } catch (error) {
+    console.error('Error subscribing to free plan:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to subscribe to free plan',
+      error: error.message,
+    });
+  }
+});
