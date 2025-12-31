@@ -38,9 +38,9 @@ const app = express();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-console.log("🌍 Environment:", appConfig.env.mode);
-console.log("🔗 Backend URL:", appConfig.server.backendUrl);
-console.log("🚦 Allowed CORS origins:", allowedOrigins);
+console.log("Environment:", appConfig.env.mode);
+console.log("Backend URL:", appConfig.server.backendUrl);
+console.log("Allowed CORS origins:", allowedOrigins);
 
 app.use(requestLogger);
 app.use(cors(corsOptions));
@@ -158,3 +158,4 @@ app.listen(PORT, () => {
   console.log(`Backend server running on port ${PORT}`);
   console.log("Prompt templates API added");
 });
+

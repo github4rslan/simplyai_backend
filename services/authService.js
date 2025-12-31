@@ -151,7 +151,7 @@ class AuthService {
     // Get user from database
     const [users] = await pool.execute(
       `SELECT p.id, p.email, p.first_name, p.last_name, p.phone, p.address, 
-              p.fiscal_code, p.role, 
+              p.fiscal_code, p.role, p.subscription_plan, p.subscription_expiry, 
               a.password_hash 
        FROM profiles p 
        JOIN auth a ON p.id = a.user_id 
@@ -228,7 +228,7 @@ class AuthService {
     const [users] = await pool.execute(
       `SELECT id, email, first_name, last_name, phone, address, fiscal_code, 
               role, subscription_plan, subscription_expiry, created_at, 
-              updated_at
+              updated_at, last_activity
        FROM profiles 
        ORDER BY created_at DESC 
        LIMIT ? OFFSET ?`,
@@ -272,7 +272,7 @@ class AuthService {
     const [users] = await pool.execute(
       `SELECT p.id, p.email, p.first_name, p.last_name, p.phone, p.address, 
             p.fiscal_code, p.role, p.subscription_plan, p.subscription_expiry, 
-            p.created_at, p.updated_at, p.auth_provider,
+            p.created_at, p.updated_at, p.last_activity, p.auth_provider,
             p.google_id, p.facebook_id,
             us.plan_id, us.status as subscription_status, us.started_at,
             sp.name as plan_name, sp.price as plan_price, sp.is_free as plan_is_free
@@ -303,6 +303,7 @@ class AuthService {
       facebookId: user.facebook_id,
       subscriptionPlan: user.subscription_plan,
       subscriptionExpiry: user.subscription_expiry,
+      lastActivity: user.last_activity,
       createdAt: user.created_at,
       updatedAt: user.updated_at,
       // Include active subscription details

@@ -46,6 +46,8 @@ const createTables = async () => {
     `);
     console.log('✅ app_settings table created');
 
+
+
     // Create form_field_types table
     await connection.execute(`
       CREATE TABLE IF NOT EXISTS form_field_types (
@@ -112,6 +114,20 @@ const createTables = async () => {
       ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
     `);
     console.log('✅ profiles table created');
+
+        await connection.execute(`
+  CREATE TABLE IF NOT EXISTS auth (
+    id CHAR(36) NOT NULL DEFAULT (UUID()),
+    user_id CHAR(36) NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY unique_user_id (user_id),
+    FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+`);
+console.log('✅ auth table created');
 
     // Create questionnaire_config table with updated structure
     await connection.execute(`
