@@ -5,6 +5,45 @@ import crypto from "crypto";
 
 const router = express.Router();
 
+// Normalize booleans that may arrive as strings/numbers/null
+const toBool = (value, defaultValue = false) =>
+  value === undefined || value === null ? defaultValue : Boolean(value);
+
+// Normalize numeric values (price, sort order, etc.)
+const toNumber = (value, defaultValue = 0) => {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : defaultValue;
+};
+
+// Ensure the subscription_plans table has the columns we write to
+let ensurePlanSchemaPromise;
+const ensurePlanSchema = async () => {
+  if (!ensurePlanSchemaPromise) {
+    ensurePlanSchemaPromise = (async () => {
+      const hasPlanType = await db.schema.hasColumn("subscription_plans", "plan_type");
+      if (!hasPlanType) {
+        await db.schema.alterTable("subscription_plans", (table) => {
+          table.string("plan_type", 50).defaultTo("single");
+        });
+        console.log("Added subscription_plans.plan_type column");
+      }
+
+      const hasOptions = await db.schema.hasColumn("subscription_plans", "options");
+      if (!hasOptions) {
+        await db.schema.alterTable("subscription_plans", (table) => {
+          table.json("options").nullable();
+        });
+        console.log("Added subscription_plans.options column");
+      }
+    })().catch((err) => {
+      ensurePlanSchemaPromise = null;
+      throw err;
+    });
+  }
+
+  return ensurePlanSchemaPromise;
+};
+
 // Helper function to normalize plan data
 const normalizePlan = (plan) => ({
   ...plan,
@@ -119,12 +158,16 @@ router.post("/", async (req, res) => {
     console.log("=== Creating new plan ===");
     console.log("Request body:", req.body);
 
+    // Ensure we have an ID; generate one if missing
+    const planId = id || crypto.randomUUID();
+    await ensurePlanSchema();
+
     // Validate required fields
-    if (!id || !name) {
+    if (!name) {
       return res.status(400).json({
         success: false,
-        message: "ID and name are required fields",
-        missing: { id: !id, name: !name },
+        message: "Plan name is required",
+        missing: { name: !name },
       });
     }
 
@@ -139,22 +182,23 @@ router.post("/", async (req, res) => {
 
     // Prepare data for insertion
     const planData = {
-      id,
+      id: planId,
       name,
       description: description || "",
-      price: price || 0,
-      is_free: is_free ? 1 : 0,
-      features: JSON.stringify(features || []),
-      active: active ? 1 : 0,
+      price: toNumber(price, 0),
+      is_free: toBool(is_free, false) ? 1 : 0,
+      features: JSON.stringify(features ?? []),
+      // Default to active so the plan appears in pricing unless explicitly disabled
+      active: toBool(active, true) ? 1 : 0,
       button_text: button_text || "",
       button_variant: button_variant || "",
-      sort_order: sort_order || 0,
+      sort_order: toNumber(sort_order, 0),
       interval: interval || "month",
-      is_popular: is_popular ? 1 : 0,
+      is_popular: toBool(is_popular, false) ? 1 : 0,
       created_at: created_at || new Date(),
       updated_at: updated_at || new Date(),
       plan_type: plan_type || "single",
-      options: JSON.stringify(options || {}),
+      options: JSON.stringify(options ?? {}),
     };
 
     console.log("Inserting plan with Knex:", planData);
@@ -163,7 +207,7 @@ router.post("/", async (req, res) => {
     await db("subscription_plans").insert(planData);
 
     // Verify the insert by selecting the created record
-    const verifyResult = await db("subscription_plans").where("id", id).first();
+    const verifyResult = await db("subscription_plans").where("id", planId).first();
     console.log("Verification query result:", verifyResult);
 
     const normalizedPlan = normalizePlan(verifyResult);
@@ -218,22 +262,30 @@ router.put("/:id", async (req, res) => {
       return res.fail(404, "Plan not found");
     }
 
+    await ensurePlanSchema();
+
     // Prepare update data
     const updateData = {
-      name,
-      description: description || "",
-      price: price || 0,
-      is_free: is_free ? 1 : 0,
-      features: JSON.stringify(features || []),
-      active: active ? 1 : 0,
-      button_text: button_text || "",
-      button_variant: button_variant || "",
-      sort_order: sort_order || 0,
-      interval: interval || "month",
-      is_popular: is_popular ? 1 : 0,
+      name: name ?? existingPlan.name,
+      description: description ?? existingPlan.description ?? "",
+      price: price !== undefined ? toNumber(price, existingPlan.price) : existingPlan.price,
+      is_free: toBool(is_free, existingPlan.is_free) ? 1 : 0,
+      features:
+        features !== undefined
+          ? JSON.stringify(features ?? [])
+          : existingPlan.features,
+      active: toBool(active, existingPlan.active) ? 1 : 0,
+      button_text: button_text ?? existingPlan.button_text ?? "",
+      button_variant: button_variant ?? existingPlan.button_variant ?? "",
+      sort_order: sort_order !== undefined ? toNumber(sort_order, existingPlan.sort_order) : existingPlan.sort_order,
+      interval: interval || existingPlan.interval || "month",
+      is_popular: toBool(is_popular, existingPlan.is_popular) ? 1 : 0,
       updated_at: updated_at || new Date(),
-      plan_type: plan_type || "single",
-      options: JSON.stringify(options || {}),
+      plan_type: plan_type || existingPlan.plan_type || "single",
+      options:
+        options !== undefined
+          ? JSON.stringify(options ?? {})
+          : existingPlan.options ?? JSON.stringify({}),
     };
 
     console.log("Updating plan with Knex:", { id, updateData });

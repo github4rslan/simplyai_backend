@@ -151,7 +151,7 @@ class AuthService {
     // Get user from database
     const [users] = await pool.execute(
       `SELECT p.id, p.email, p.first_name, p.last_name, p.phone, p.address, 
-              p.fiscal_code, p.role, p.subscription_plan, p.subscription_expiry, 
+              p.fiscal_code, p.role, 
               a.password_hash 
        FROM profiles p 
        JOIN auth a ON p.id = a.user_id 
