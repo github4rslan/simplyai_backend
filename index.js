@@ -60,6 +60,9 @@ app.use(express.static("public"));
 // Initialize passport
 app.use(passport.initialize());
 
+// Root health for platforms hitting "/"
+app.get("/", (req, res) => res.json({ ok: true }));
+
 // Serve uploaded files statically
 app.use("/uploads", express.static(path.join(__dirname, "../simplyai-FE/dist")));
 
