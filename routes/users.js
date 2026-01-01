@@ -27,10 +27,30 @@ router.get('/:userId/subscription', async (req, res) => {
     );
     
     if (rows.length === 0) {
-      console.log('No active subscription found for user:', userId);
-      return res.status(404).json({ 
-        success: false, 
-        message: 'No active subscription found' 
+      console.log('No active subscription found for user:', userId, '- attempting free plan fallback');
+      const [freeRows] = await pool.query(
+        `SELECT id as planId, name as planName, price FROM subscription_plans
+         WHERE (is_free = 1 OR price = 0)
+         ORDER BY created_at ASC
+         LIMIT 1`
+      );
+      if (freeRows.length === 0) {
+        console.log('No free plan available to fallback for user:', userId);
+        return res.status(404).json({ 
+          success: false, 
+          message: 'No active subscription found' 
+        });
+      }
+      const freePlan = freeRows[0];
+      return res.json({
+        success: true,
+        data: {
+          planId: freePlan.planId,
+          planName: freePlan.planName,
+          price: freePlan.price,
+          status: 'fallback-free',
+          createdAt: null
+        }
       });
     }
     
