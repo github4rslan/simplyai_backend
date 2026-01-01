@@ -8,8 +8,14 @@ app.post("/:id", async (req, res) => {
   const { title, content } = req.body;
 
   try {
-    // Convert content to JSON string if needed
-    const contentJson = typeof content === 'string' ? JSON.stringify(content) : JSON.stringify(content);
+    // Normalize content: if blank, store NULL so frontend can fallback
+    const isBlank =
+      content === null ||
+      content === undefined ||
+      (typeof content === "string" && content.trim() === "");
+    const contentJson = isBlank
+      ? null
+      : JSON.stringify(typeof content === "string" ? content : content);
     const slug = id; // Use id as slug if not provided
 
     await pool.query(
@@ -95,8 +101,14 @@ app.put("/:id", async (req, res) => {
     if (existing.length > 0) {
       // Update existing page
       console.log("Updating existing page with ID:", id);
-      // Convert content to JSON string if needed
-      const contentJson = typeof content === 'string' ? JSON.stringify(content) : JSON.stringify(content);
+      // Normalize content: if blank, store NULL so frontend can fallback
+      const isBlank =
+        content === null ||
+        content === undefined ||
+        (typeof content === "string" && content.trim() === "");
+      const contentJson = isBlank
+        ? null
+        : JSON.stringify(typeof content === "string" ? content : content);
       const [result] = await pool.query(
         "UPDATE pages SET title = ?, content = ? WHERE id = ?",
         [title, contentJson, id]
@@ -110,8 +122,14 @@ app.put("/:id", async (req, res) => {
     } else {
       // Insert new page
       console.log("Inserting new page with ID:", id);
-      // Convert content to JSON string if needed
-      const contentJson = typeof content === 'string' ? JSON.stringify(content) : JSON.stringify(content);
+      // Normalize content: if blank, store NULL so frontend can fallback
+      const isBlank =
+        content === null ||
+        content === undefined ||
+        (typeof content === "string" && content.trim() === "");
+      const contentJson = isBlank
+        ? null
+        : JSON.stringify(typeof content === "string" ? content : content);
       const slug = id; // Use id as slug if not provided
       const [result] = await pool.query(
         "INSERT INTO pages (id, title, slug, content) VALUES (?, ?, ?, ?)",
