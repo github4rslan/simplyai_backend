@@ -53,6 +53,20 @@ app.get("/:id", async (req, res) => {
       }
     }
 
+    // If content is missing/blank, let frontend fallback render
+    if (
+      !page.content ||
+      (typeof page.content === "string" && page.content.trim() === "")
+    ) {
+      return res.json({ 
+        data: { 
+          id, 
+          title: page.title || id.charAt(0).toUpperCase() + id.slice(1), 
+          content: "" 
+        } 
+      });
+    }
+
     console.log("Page fetched:", page.id);
 
     res.json({ data: page }); // wrap in {data: ...} so frontend works
