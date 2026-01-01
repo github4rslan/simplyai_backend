@@ -1282,12 +1282,13 @@ router.post("/register-with-plan", async (req, res) => {
       });
     }
 
+    // Accept plan only when explicitly provided via query (?plan=...) or body.planId
+    const incomingPlanId = req.query?.plan || planId || null;
     let finalPlanId = null;
     let selectedPlan = null;
 
-    // Only attach a plan/subscription if a planId was provided
-    if (planId) {
-      selectedPlan = await resolvePlan(planId);
+    if (incomingPlanId) {
+      selectedPlan = await resolvePlan(incomingPlanId);
       finalPlanId = selectedPlan.id;
 
       if (!selectedPlan.is_free && selectedPlan.price > 0) {
