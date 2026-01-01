@@ -1345,22 +1345,7 @@ router.post("/register-with-plan", async (req, res) => {
         expiresIn: "24h",
       });
 
-      // Send welcome email
-      try {
-        await sendPaymentNotificationEmail({
-          email,
-          firstName,
-          lastName,
-          planName: plan.name,
-          planPrice: 0,
-          isFreeRegistration: true,
-        });
-      } catch (emailError) {
-        console.error("Email sending failed:", emailError);
-        // Don't fail registration if email fails
-      }
-
-      res.status(201).json({
+      const responseBody = {
         success: true,
         message: isOAuthUser
           ? "User registered successfully with OAuth"
@@ -1377,6 +1362,23 @@ router.post("/register-with-plan", async (req, res) => {
           authProvider: authProvider || "email",
         },
         token,
+      };
+
+      // Respond immediately
+      res.status(201).json(responseBody);
+
+      // Fire-and-forget welcome email (do not block response)
+      Promise.resolve(
+        sendPaymentNotificationEmail({
+          email,
+          firstName,
+          lastName,
+          planName: plan.name,
+          planPrice: 0,
+          isFreeRegistration: true,
+        })
+      ).catch((emailError) => {
+        console.error("Email sending failed (non-blocking):", emailError);
       });
     } catch (error) {
       await connection.rollback();
