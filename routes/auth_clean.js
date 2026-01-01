@@ -1282,13 +1282,20 @@ router.post("/register-with-plan", async (req, res) => {
       });
     }
 
-    const plan = await resolvePlan(planId);
-    const finalPlanId = plan.id;
-    if (!plan.is_free && plan.price > 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Only free plans are allowed for this endpoint.",
-      });
+    let finalPlanId = null;
+    let selectedPlan = null;
+
+    // Only attach a plan/subscription if a planId was provided
+    if (planId) {
+      selectedPlan = await resolvePlan(planId);
+      finalPlanId = selectedPlan.id;
+
+      if (!selectedPlan.is_free && selectedPlan.price > 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Only free plans are allowed for this endpoint.",
+        });
+      }
     }
 
     // Hash password only for non-OAuth users
@@ -1331,11 +1338,13 @@ router.post("/register-with-plan", async (req, res) => {
         );
       }
 
-      // Insert subscription
-      await connection.execute(
-        "INSERT INTO user_subscriptions (id, user_id, plan_id, status, started_at, created_at, updated_at) VALUES (?, ?, ?, ?, NOW(), NOW(), NOW())",
-        [uuidv4(), userId, finalPlanId, "active"]
-      );
+      // Insert subscription only if a plan was provided
+      if (finalPlanId) {
+        await connection.execute(
+          "INSERT INTO user_subscriptions (id, user_id, plan_id, status, started_at, created_at, updated_at) VALUES (?, ?, ?, ?, NOW(), NOW(), NOW())",
+          [uuidv4(), userId, finalPlanId, "active"]
+        );
+      }
 
       await connection.commit();
       connection.release();
@@ -1357,8 +1366,8 @@ router.post("/register-with-plan", async (req, res) => {
           lastName,
           phone,
           planId: finalPlanId,
-          planName: plan.name,
-          isFree: true,
+          planName: selectedPlan ? selectedPlan.name : null,
+          isFree: selectedPlan ? true : false,
           authProvider: authProvider || "email",
         },
         token,
@@ -1368,18 +1377,21 @@ router.post("/register-with-plan", async (req, res) => {
       res.status(201).json(responseBody);
 
       // Fire-and-forget welcome email (do not block response)
-      Promise.resolve(
-        sendPaymentNotificationEmail({
-          email,
-          firstName,
-          lastName,
-          planName: plan.name,
-          planPrice: 0,
-          isFreeRegistration: true,
-        })
-      ).catch((emailError) => {
-        console.error("Email sending failed (non-blocking):", emailError);
-      });
+      // Only send plan email if a plan was selected
+      if (selectedPlan) {
+        Promise.resolve(
+          sendPaymentNotificationEmail({
+            email,
+            firstName,
+            lastName,
+            planName: selectedPlan.name,
+            planPrice: selectedPlan.price || 0,
+            isFreeRegistration: true,
+          })
+        ).catch((emailError) => {
+          console.error("Email sending failed (non-blocking):", emailError);
+        });
+      }
     } catch (error) {
       await connection.rollback();
       connection.release();
