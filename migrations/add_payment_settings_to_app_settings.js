@@ -20,23 +20,23 @@ async function addPaymentSettingsColumns() {
     const columnsToAdd = [
       {
         name: 'enable_payments',
-        definition: 'BOOLEAN DEFAULT TRUE COMMENT "Enable or disable payment system"'
+        definition: "BOOLEAN DEFAULT TRUE COMMENT 'Enable or disable payment system'"
       },
       {
         name: 'currency',
-        definition: 'VARCHAR(3) DEFAULT "EUR" COMMENT "Payment currency (EUR, USD, etc.)"'
+        definition: "VARCHAR(3) DEFAULT 'EUR' COMMENT 'Payment currency (EUR, USD, etc.)'"
       },
       {
         name: 'vat_percentage',
-        definition: 'DECIMAL(5,2) DEFAULT 22.00 COMMENT "VAT percentage for invoices"'
+        definition: "DECIMAL(5,2) DEFAULT 22.00 COMMENT 'VAT percentage for invoices'"
       },
       {
         name: 'stripe_public_key',
-        definition: 'TEXT NULL COMMENT "Stripe publishable key for frontend"'
+        definition: "TEXT NULL COMMENT 'Stripe publishable key for frontend'"
       },
       {
         name: 'stripe_secret_key',
-        definition: 'TEXT NULL COMMENT "Stripe secret key for backend (encrypted)"'
+        definition: "TEXT NULL COMMENT 'Stripe secret key for backend (encrypted)'"
       }
     ];
     
@@ -103,8 +103,17 @@ async function addPaymentSettingsColumns() {
   }
 }
 
-// Run the migration
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Run directly (Windows-safe path check)
+import path from "path";
+import { fileURLToPath } from "url";
+
+const isDirectRun = (() => {
+  const thisFile = fileURLToPath(import.meta.url);
+  const invoked = process.argv[1] ? path.resolve(process.argv[1]) : "";
+  return path.resolve(thisFile) === invoked;
+})();
+
+if (isDirectRun) {
   addPaymentSettingsColumns()
     .then(() => {
       console.log('✅ Migration script completed');
