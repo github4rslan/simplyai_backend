@@ -36,15 +36,38 @@ router.get("/user-questionnaires-with-access", async (req, res) => {
       [userId]
     );
 
-    if (userPlanRows.length === 0) {
-      return res.json({
-        success: false,
-        message: "No active subscription found for user",
-        data: [],
-      });
-    }
+    let userPlan = userPlanRows[0];
 
-    const userPlan = userPlanRows[0];
+    // Fallback: if user has no active subscription, try to use a free/default plan
+    if (!userPlan) {
+      const [freePlanRows] = await pool.query(
+        `
+        SELECT id as plan_id, name as plan_name, options as plan_options
+        FROM subscription_plans
+        WHERE is_free = 1 OR price = 0
+        ORDER BY created_at ASC
+        LIMIT 1
+      `
+      );
+
+      if (freePlanRows.length === 0) {
+        return res.json({
+          success: true,
+          message: "No active subscription and no free plan available",
+          data: [],
+        });
+      }
+
+      userPlan = {
+        subscription_id: null,
+        plan_id: freePlanRows[0].plan_id,
+        plan_name: freePlanRows[0].plan_name,
+        plan_options: freePlanRows[0].plan_options,
+        started_at: null,
+        current_sequence: 0,
+        current_attempt: 1,
+      };
+    }
     const planOptions =
       typeof userPlan.plan_options === "string"
         ? JSON.parse(userPlan.plan_options)
@@ -79,12 +102,14 @@ router.get("/user-questionnaires-with-access", async (req, res) => {
           completed_at,
           status
         FROM questionnaire_responses
-        WHERE user_id = ? AND subscription_id = ? AND questionnaire_id IN (${questionnaireIds
-          .map(() => "?")
-          .join(",")})
+        WHERE user_id = ? 
+          AND (subscription_id = ? OR ? IS NULL)
+          AND questionnaire_id IN (${questionnaireIds
+            .map(() => "?")
+            .join(",")})
         ORDER BY questionnaire_id, attempt_number DESC
       `,
-        [userId, userPlan.subscription_id, ...questionnaireIds]
+        [userId, userPlan.subscription_id, userPlan.subscription_id, ...questionnaireIds]
       );
 
       // Group completions by questionnaire
