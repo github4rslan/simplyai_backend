@@ -87,7 +87,8 @@ app.use(passport.initialize());
 app.get("/", (req, res) => res.json({ ok: true }));
 
 // Serve uploaded files statically (PDFs, images)
-app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
+// Files are written to /src/uploads/... so serve that directory
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // Serve public files (logos, favicons) statically with cache headers
 app.use("/", express.static(path.join(__dirname, "../public"), {
