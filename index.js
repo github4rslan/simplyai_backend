@@ -2,6 +2,9 @@ import forgotPasswordRouter from "./routes/auth-forgot-password.js";
 import resetPasswordRouter from "./routes/auth-reset-password.js";
 import express from "express";
 import cors from "cors";
+import compression from "compression";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
@@ -35,12 +38,32 @@ import { responseFormatter } from "./middleware/responseFormatter.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 
 const app = express();
+// Required when behind a proxy/load balancer (e.g., Render/Netlify) so rate limiting & secure cookies use real IP
+app.set("trust proxy", 1);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 console.log("Environment:", appConfig.env.mode);
 console.log("Backend URL:", appConfig.server.backendUrl);
 console.log("Allowed CORS origins:", allowedOrigins);
+
+// Security headers
+app.use(
+  helmet({
+    contentSecurityPolicy: false, // disable CSP here if not configured
+  })
+);
+
+// Response compression
+app.use(compression());
+
+// Basic rate limiting for auth and sensitive routes
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 app.use(requestLogger);
 app.use(cors(corsOptions));
@@ -49,8 +72,8 @@ app.use(express.json());
 app.use(responseFormatter);
 
 // Register the password reset routes after app is initialized and middleware is set up
-app.use("/api/auth", forgotPasswordRouter);
-app.use("/api/auth", resetPasswordRouter);
+app.use("/api/auth", authLimiter, forgotPasswordRouter);
+app.use("/api/auth", authLimiter, resetPasswordRouter);
 
 // Use the routes from routes/pages.js
 app.use("/api/pages", pageData);
@@ -124,7 +147,7 @@ app.get("/favicon.ico", (req, res) => {
 app.use("/api/upload", imageUpload);
 
 app.use("/api/health", healthRoutes);
-app.use("/api/auth", authRoutes);
+app.use("/api/auth", authLimiter, authRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/forms", formRoutes);
 app.use("/api/upload", uploadRoutes);

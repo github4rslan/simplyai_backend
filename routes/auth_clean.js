@@ -40,8 +40,10 @@ const uuidRegex =
 async function ensureDefaultFreePlan() {
   const existing = await db("subscription_plans")
     .select("id", "name", "is_free", "price")
-    .where("is_free", 1)
-    .orWhere("price", 0)
+    .where("name", DEFAULT_FREE_PLAN.name)
+    .orWhere((qb) => {
+      qb.where("is_free", 1).orWhere("price", 0);
+    })
     .orderBy("created_at", "asc")
     .first();
 
@@ -414,7 +416,16 @@ router.post("/register/complete-with-plan", async (req, res) => {
       });
     }
 
-    const { email, password, firstName, lastName, phone } = tempUserData;
+    const {
+      email,
+      password,
+      firstName,
+      lastName,
+      phone,
+      googleId = null,
+      facebookId = null,
+      authProvider = "email",
+    } = tempUserData;
 
     // Check if user already exists
     const existingUsers = await db("profiles").select("id").where("email", email);
@@ -512,64 +523,8 @@ router.post("/register/complete-with-plan", async (req, res) => {
         // Continue with default (true) if settings check fails
       }
 
-      // Send email notification with payment information for paid plans
-      if (shouldSendWelcomeEmail) {
-        try {
-          if (isFreeRegistration) {
-            // Free plan - no payment info needed
-            await sendPaymentNotificationEmail({
-              email,
-              firstName,
-              lastName,
-              planName: plan.name,
-              planPrice: 0,
-              isFreeRegistration: true,
-            });
-            console.log(
-              "✅ Free plan registration confirmation email sent:",
-              email,
-              plan.name
-            );
-          } else {
-            // Paid plan - include payment information
-            const transactionId = `REG_${Date.now()}_${uuidv4().substring(
-              0,
-              8
-            )}`;
-
-            // For new registration flow, we assume payment was processed externally
-            // Include payment details in the email
-            await sendPaymentNotificationEmail({
-              email,
-              firstName,
-              lastName,
-              planName: plan.name,
-              planPrice: plan.price,
-              paymentMethod: "Carta di Credito", // Default payment method for registrations
-              transactionId: transactionId,
-              isFreeRegistration: false,
-            });
-            console.log(
-              "✅ Paid plan registration confirmation email sent with payment info:",
-              email,
-              plan.name
-            );
-          }
-        } catch (emailError) {
-          console.error(
-            "Failed to send registration confirmation email:",
-            emailError
-          );
-          // Don't fail the registration if email fails
-        }
-      } else {
-        console.log(
-          "📧 Welcome email disabled in settings - skipping email for:",
-          email
-        );
-      }
-
-      res.status(201).json({
+      // Respond immediately
+      const responseBody = {
         success: true,
         message: "User registered successfully",
         data: {
@@ -585,7 +540,63 @@ router.post("/register/complete-with-plan", async (req, res) => {
           },
           token,
         },
-      });
+      };
+
+      res.status(201).json(responseBody);
+
+      // Send email notification asynchronously (non-blocking)
+      if (shouldSendWelcomeEmail) {
+        Promise.resolve(
+          (async () => {
+            if (isFreeRegistration) {
+              await sendPaymentNotificationEmail({
+                email,
+                firstName,
+                lastName,
+                planName: plan.name,
+                planPrice: 0,
+                isFreeRegistration: true,
+              });
+              console.log(
+                "? Free plan registration confirmation email sent:",
+                email,
+                plan.name
+              );
+            } else {
+              const transactionId = `REG_${Date.now()}_${uuidv4().substring(
+                0,
+                8
+              )}`;
+              await sendPaymentNotificationEmail({
+                email,
+                firstName,
+                lastName,
+                planName: plan.name,
+                planPrice: plan.price,
+                paymentMethod: "Carta di Credito",
+                transactionId: transactionId,
+                isFreeRegistration: false,
+              });
+              console.log(
+                "? Paid plan registration confirmation email sent with payment info:",
+                email,
+                plan.name
+              );
+            }
+          })()
+        ).catch((emailError) => {
+          console.error(
+            "Failed to send registration confirmation email (non-blocking):",
+            emailError
+          );
+        });
+      } else {
+        console.log(
+          "?? Welcome email disabled in settings - skipping email for:",
+          email
+        );
+      }
+
     } catch (error) {
       await connection.rollback();
       connection.release();
@@ -652,7 +663,7 @@ router.get(
         const { v4: uuidv4 } = await import("uuid");
         const newUserId = uuidv4();
 
-        // Create new user account with free plan by default
+        // Create new user account without auto-assigning a plan
         await db("profiles").insert({
           id: newUserId,
           email,
@@ -660,7 +671,7 @@ router.get(
           last_name: lastName,
           google_id: googleId,
           auth_provider: "google",
-          subscription_plan: "free",
+          subscription_plan: null,
           role: "user",
           created_at: db.fn.now(),
           updated_at: db.fn.now(),
@@ -858,9 +869,8 @@ router.post("/register/google", async (req, res) => {
     // Generate user ID
     const userId = uuidv4();
 
-    // Get plan ID (either provided or default free plan)
-    let finalPlanId = subscription_plan;
-
+    // Plan is optional; only set if provided
+    let finalPlanId = null;
     if (subscription_plan) {
       if (!uuidRegex.test(subscription_plan)) {
         try {
@@ -871,30 +881,17 @@ router.post("/register/google", async (req, res) => {
             .first();
 
           if (planResult) {
-            finalPlanId = planResult[0].id;
-            console.log(
-              "✅ Found plan by name:",
-              subscription_plan,
-              "-> ID:",
-              finalPlanId
-            );
+            finalPlanId = planResult.id || planResult[0]?.id;
+            console.log("✅ Found plan:", subscription_plan, "-> ID:", finalPlanId);
           } else {
-            console.warn(
-              "⚠️ Plan not found, using default free plan:",
-              subscription_plan
-            );
-            finalPlanId = await getDefaultFreePlanId();
+            console.warn("⚠️ Plan not found for:", subscription_plan);
           }
         } catch (error) {
-          console.error(
-            "❌ Error finding plan by name, using default free plan:",
-            error
-          );
-          finalPlanId = await getDefaultFreePlanId();
+          console.error("❌ Error finding plan by name:", error);
         }
+      } else {
+        finalPlanId = subscription_plan;
       }
-    } else {
-      finalPlanId = await getDefaultFreePlanId();
     }
 
     console.log("🎯 Final plan ID to be used:", finalPlanId);
@@ -926,13 +923,15 @@ router.post("/register/google", async (req, res) => {
         ]
       );
 
-      // Create subscription record
-      await connection.execute(
-        `INSERT INTO user_subscriptions 
-         (id, user_id, plan_id, status, started_at, created_at, updated_at) 
-         VALUES (?, ?, ?, 'active', NOW(), NOW(), NOW())`,
-        [uuidv4(), userId, finalPlanId]
-      );
+      // Create subscription record only if a plan was provided
+      if (finalPlanId) {
+        await connection.execute(
+          `INSERT INTO user_subscriptions 
+           (id, user_id, plan_id, status, started_at, created_at, updated_at) 
+           VALUES (?, ?, ?, 'active', NOW(), NOW(), NOW())`,
+          [uuidv4(), userId, finalPlanId]
+        );
+      }
 
       await connection.commit();
       connection.release();
@@ -949,68 +948,7 @@ router.post("/register/google", async (req, res) => {
 
       console.log("✅ Google user registered successfully:", userId);
 
-      // Send welcome email
-      try {
-        const planName =
-          subscription_plan === "free" ? "Piano Gratuito" : subscription_plan;
-        const isFreeRegistration =
-          !subscription_plan ||
-          subscription_plan === "free" ||
-          subscription_plan === "Piano Gratuito";
-
-        if (isFreeRegistration) {
-          await sendPaymentNotificationEmail({
-            email,
-            firstName,
-            lastName,
-            planName: planName,
-            planPrice: 0,
-            isFreeRegistration: true,
-          });
-          console.log(
-            "✅ Welcome email sent to Google user (free plan):",
-            email
-          );
-        } else {
-          const transactionId = `OAUTH_${Date.now()}_${uuidv4().substring(
-            0,
-            8
-          )}`;
-          let actualPlanPrice = 0;
-
-          try {
-            const planDetails = await db("subscription_plans")
-              .select("price")
-              .where("name", planName)
-              .orWhere("id", planName)
-              .first();
-            if (planDetails) {
-              actualPlanPrice = planDetails[0].price;
-            }
-          } catch (error) {
-            console.error("Error fetching plan price:", error);
-          }
-
-          await sendPaymentNotificationEmail({
-            email,
-            firstName,
-            lastName,
-            planName: planName,
-            planPrice: actualPlanPrice,
-            paymentMethod: "OAuth Registration",
-            transactionId: transactionId,
-            isFreeRegistration: false,
-          });
-          console.log(
-            "✅ Welcome email sent to Google user (paid plan):",
-            email
-          );
-        }
-      } catch (emailError) {
-        console.error("Failed to send welcome email:", emailError);
-      }
-
-      res.status(201).json({
+      const responseBody = {
         success: true,
         message: "Google user registered successfully",
         data: {
@@ -1023,7 +961,75 @@ router.post("/register/google", async (req, res) => {
           },
           token,
         },
-      });
+      };
+
+      // Respond immediately
+      res.status(201).json(responseBody);
+
+      // Send welcome email asynchronously if plan was provided
+      if (finalPlanId) {
+        const planName =
+          subscription_plan === "free" ? "Piano Gratuito" : subscription_plan;
+        const isFreeRegistration =
+          !subscription_plan ||
+          subscription_plan === "free" ||
+          subscription_plan === "Piano Gratuito";
+
+        Promise.resolve(
+          (async () => {
+            if (isFreeRegistration) {
+              await sendPaymentNotificationEmail({
+                email,
+                firstName,
+                lastName,
+                planName: planName,
+                planPrice: 0,
+                isFreeRegistration: true,
+              });
+              console.log(
+                "✅ Welcome email sent to Google user (free plan):",
+                email
+              );
+            } else {
+              const transactionId = `OAUTH_${Date.now()}_${uuidv4().substring(
+                0,
+                8
+              )}`;
+              let actualPlanPrice = 0;
+
+              try {
+                const planDetails = await db("subscription_plans")
+                  .select("price")
+                  .where("name", planName)
+                  .orWhere("id", planName)
+                  .first();
+                if (planDetails) {
+                  actualPlanPrice = planDetails.price || planDetails[0]?.price || 0;
+                }
+              } catch (error) {
+                console.error("Error fetching plan price:", error);
+              }
+
+              await sendPaymentNotificationEmail({
+                email,
+                firstName,
+                lastName,
+                planName: planName,
+                planPrice: actualPlanPrice,
+                paymentMethod: "OAuth Registration",
+                transactionId: transactionId,
+                isFreeRegistration: false,
+              });
+              console.log(
+                "✅ Welcome email sent to Google user (paid plan):",
+                email
+              );
+            }
+          })()
+        ).catch((emailError) => {
+          console.error("Failed to send welcome email (non-blocking):", emailError);
+        });
+      }
     } catch (error) {
       await connection.rollback();
       connection.release();
@@ -1079,7 +1085,7 @@ router.post("/register/facebook", async (req, res) => {
     }
 
     const userId = uuidv4();
-    let finalPlanId = subscription_plan;
+    let finalPlanId = null;
 
     if (subscription_plan) {
       const uuidRegex =
@@ -1094,16 +1100,14 @@ router.post("/register/facebook", async (req, res) => {
             .first();
 
           if (planResult) {
-            finalPlanId = planResult[0].id;
-          } else {
-            finalPlanId = await getDefaultFreePlanId();
+            finalPlanId = planResult.id || planResult[0]?.id;
           }
         } catch (error) {
-          finalPlanId = await getDefaultFreePlanId();
+          console.error("Error finding plan for Facebook registration:", error);
         }
+      } else {
+        finalPlanId = subscription_plan;
       }
-    } else {
-      finalPlanId = await getDefaultFreePlanId();
     }
 
     // Start transaction
@@ -1133,13 +1137,15 @@ router.post("/register/facebook", async (req, res) => {
         ]
       );
 
-      // Create subscription record
-      await connection.execute(
-        `INSERT INTO user_subscriptions 
-         (id, user_id, plan_id, status, started_at, created_at, updated_at) 
-         VALUES (?, ?, ?, 'active', NOW(), NOW(), NOW())`,
-        [uuidv4(), userId, finalPlanId]
-      );
+      // Create subscription record only if plan provided
+      if (finalPlanId) {
+        await connection.execute(
+          `INSERT INTO user_subscriptions 
+           (id, user_id, plan_id, status, started_at, created_at, updated_at) 
+           VALUES (?, ?, ?, 'active', NOW(), NOW(), NOW())`,
+          [uuidv4(), userId, finalPlanId]
+        );
+      }
 
       await connection.commit();
       connection.release();
@@ -1155,8 +1161,8 @@ router.post("/register/facebook", async (req, res) => {
 
       console.log("✅ Facebook user registered successfully:", userId);
 
-      // Send welcome email
-      try {
+      // Send welcome email asynchronously if a plan was provided
+      if (finalPlanId) {
         const planName =
           subscription_plan === "free" ? "Piano Gratuito" : subscription_plan;
         const isFreeRegistration =
@@ -1164,48 +1170,52 @@ router.post("/register/facebook", async (req, res) => {
           subscription_plan === "free" ||
           subscription_plan === "Piano Gratuito";
 
-        if (isFreeRegistration) {
-          await sendPaymentNotificationEmail({
-            email,
-            firstName,
-            lastName,
-            planName: planName,
-            planPrice: 0,
-            isFreeRegistration: true,
-          });
-        } else {
-          const transactionId = `OAUTH_${Date.now()}_${uuidv4().substring(
-            0,
-            8
-          )}`;
-          let actualPlanPrice = 0;
+        Promise.resolve(
+          (async () => {
+            if (isFreeRegistration) {
+              await sendPaymentNotificationEmail({
+                email,
+                firstName,
+                lastName,
+                planName: planName,
+                planPrice: 0,
+                isFreeRegistration: true,
+              });
+            } else {
+              const transactionId = `OAUTH_${Date.now()}_${uuidv4().substring(
+                0,
+                8
+              )}`;
+              let actualPlanPrice = 0;
 
-          try {
-            const planDetails = await db("subscription_plans")
-              .select("price")
-              .where("name", planName)
-              .orWhere("id", planName)
-              .first();
-            if (planDetails) {
-              actualPlanPrice = planDetails[0].price;
+              try {
+                const planDetails = await db("subscription_plans")
+                  .select("price")
+                  .where("name", planName)
+                  .orWhere("id", planName)
+                  .first();
+                if (planDetails) {
+                  actualPlanPrice = planDetails.price || planDetails[0]?.price || 0;
+                }
+              } catch (error) {
+                console.error("Error fetching plan price:", error);
+              }
+
+              await sendPaymentNotificationEmail({
+                email,
+                firstName,
+                lastName,
+                planName: planName,
+                planPrice: actualPlanPrice,
+                paymentMethod: "OAuth Registration",
+                transactionId: transactionId,
+                isFreeRegistration: false,
+              });
             }
-          } catch (error) {
-            console.error("Error fetching plan price:", error);
-          }
-
-          await sendPaymentNotificationEmail({
-            email,
-            firstName,
-            lastName,
-            planName: planName,
-            planPrice: actualPlanPrice,
-            paymentMethod: "OAuth Registration",
-            transactionId: transactionId,
-            isFreeRegistration: false,
-          });
-        }
-      } catch (emailError) {
-        console.error("Failed to send welcome email:", emailError);
+          })()
+        ).catch((emailError) => {
+          console.error("Failed to send welcome email (non-blocking):", emailError);
+        });
       }
 
       res.status(201).json({

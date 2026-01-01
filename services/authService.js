@@ -360,7 +360,7 @@ class AuthService {
       return {
         success: true,
         message: "Profile updated successfully",
-        data: updatedUser.data,
+        data: updatedUser,
       };
     } catch (error) {
       console.error("Update user profile error:", error);

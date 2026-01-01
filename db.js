@@ -10,12 +10,14 @@ const {
   connectionLimit,
 } = appConfig.database;
 
-console.log("🔧 Database configuration:");
-console.log("- DB_HOST:", host);
-console.log("- DB_USER:", user);
-console.log("- DB_PASSWORD:", password ? "[SET]" : "[NOT SET]");
-console.log("- DB_NAME:", name);
-console.log("- DB_PORT:", port);
+if (process.env.NODE_ENV !== "production") {
+  console.log("DB configuration:");
+  console.log("- DB_HOST:", host);
+  console.log("- DB_USER:", user);
+  console.log("- DB_PASSWORD:", password ? "[SET]" : "[NOT SET]");
+  console.log("- DB_NAME:", name);
+  console.log("- DB_PORT:", port);
+}
 
 export const pool = mysql.createPool({
   host,
