@@ -442,24 +442,31 @@ router.post("/register/complete-with-plan", async (req, res) => {
     await connection.beginTransaction();
 
     try {
-      // Insert into auth table
+      // Insert profile first (auth has FK to profiles)
       await connection.execute(
-        "INSERT INTO auth (user_id, password_hash, created_at, updated_at) VALUES (?, ?, NOW(), NOW())",
-        [userId, hashedPassword]
-      );
-
-      // Insert into profiles table
-      await connection.execute(
-        "INSERT INTO profiles (id, email, first_name, last_name, phone, full_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())",
+        `INSERT INTO profiles 
+         (id, email, first_name, last_name, full_name, phone, google_id, facebook_id, auth_provider, created_at, updated_at) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
         [
           userId,
           email,
           firstName,
           lastName,
-          phone || null,
           `${firstName} ${lastName}`,
+          phone || null,
+          googleId || null,
+          facebookId || null,
+          authProvider || "email",
         ]
       );
+
+      // Insert into auth table if we have a password
+      if (hashedPassword) {
+        await connection.execute(
+          "INSERT INTO auth (user_id, password_hash, created_at, updated_at) VALUES (?, ?, NOW(), NOW())",
+          [userId, hashedPassword]
+        );
+      }
 
       // Create subscription
       await connection.execute(
@@ -1298,15 +1305,7 @@ router.post("/register-with-plan", async (req, res) => {
     await connection.beginTransaction();
 
     try {
-      // Insert into auth table (only if password exists)
-      if (hashedPassword) {
-        await connection.execute(
-          "INSERT INTO auth (user_id, password_hash, created_at, updated_at) VALUES (?, ?, NOW(), NOW())",
-          [userId, hashedPassword]
-        );
-      }
-
-      // ✅ FIXED: Removed email_verified - only 9 values for 9 columns
+      // Insert profile first (auth has FK to profiles)
       await connection.execute(
         `INSERT INTO profiles 
          (id, email, first_name, last_name, full_name, phone, google_id, facebook_id, auth_provider, created_at, updated_at) 
@@ -1323,6 +1322,14 @@ router.post("/register-with-plan", async (req, res) => {
           authProvider || "email",
         ]
       );
+
+      // Insert into auth table (only if password exists)
+      if (hashedPassword) {
+        await connection.execute(
+          "INSERT INTO auth (user_id, password_hash, created_at, updated_at) VALUES (?, ?, NOW(), NOW())",
+          [userId, hashedPassword]
+        );
+      }
 
       // Insert subscription
       await connection.execute(
