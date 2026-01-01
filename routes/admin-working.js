@@ -216,7 +216,7 @@ router.get(
             .where("pq.plan_id", user.plan_id)
             .first();
 
-          const totalQuestionnaires = totalQuestionnaireCount.total;
+          const totalQuestionnaires = totalQuestionnaireCount?.total || 0;
 
           // Get completed questionnaires for this user and plan
           const completedQuestionnaireCount = await db("questionnaire_responses as qr")
@@ -228,7 +228,9 @@ router.get(
             .first();
 
           const completedQuestionnaires =
-            completedQuestionnaireCount[0].completed;
+            completedQuestionnaireCount?.completed ??
+            completedQuestionnaireCount?.[0]?.completed ??
+            0;
           const percentage =
             totalQuestionnaires > 0
               ? (completedQuestionnaires / totalQuestionnaires) * 100
@@ -311,7 +313,7 @@ router.get(
         .where("pq.plan_id", subscription.plan_id)
         .first();
 
-      const totalQuestionnaires = totalQuestionnaireCount.total;
+      const totalQuestionnaires = totalQuestionnaireCount?.total || 0;
 
       // Get completed questionnaires for this user and plan
       const completedQuestionnaireCount = await db("questionnaire_responses as qr")
@@ -322,7 +324,8 @@ router.get(
         .whereNotNull("qr.completed_at")
         .first();
 
-      const completedQuestionnaires = completedQuestionnaireCount.completed;
+      const completedQuestionnaires =
+        completedQuestionnaireCount?.completed ?? 0;
       const percentage =
         totalQuestionnaires > 0
           ? (completedQuestionnaires / totalQuestionnaires) * 100
