@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { v4 as uuidv4 } from "uuid";
 import { db } from "../config/knex.js";
+import { pool } from "../db.js";
 import passport from "../config/passport.js";
 import { appConfig } from "../config/app.js";
 
