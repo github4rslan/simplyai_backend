@@ -45,8 +45,9 @@ async function ensureDefaultFreePlan() {
     .orderBy("created_at", "asc")
     .first();
 
-  if (existing.length > 0) {
-    return existing[0];
+  // .first() returns a single row object or undefined
+  if (existing) {
+    return existing;
   }
 
   const planId = uuidv4();
@@ -99,8 +100,8 @@ async function resolvePlan(planIdentifier) {
       .first();
   }
 
-  if (planResult.length > 0) {
-    return planResult[0];
+  if (planResult) {
+    return planResult;
   }
 
   return ensureDefaultFreePlan();
