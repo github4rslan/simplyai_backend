@@ -6,8 +6,17 @@ import crypto from "crypto";
 const router = express.Router();
 
 // Normalize booleans that may arrive as strings/numbers/null
-const toBool = (value, defaultValue = false) =>
-  value === undefined || value === null ? defaultValue : Boolean(value);
+const toBool = (value, defaultValue = false) => {
+  if (value === undefined || value === null) return defaultValue;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    const lowered = value.trim().toLowerCase();
+    if (["true", "1", "yes", "y", "on"].includes(lowered)) return true;
+    if (["false", "0", "no", "n", "off"].includes(lowered)) return false;
+  }
+  return Boolean(value);
+};
 
 // Normalize numeric values (price, sort order, etc.)
 const toNumber = (value, defaultValue = 0) => {
@@ -34,6 +43,14 @@ const ensurePlanSchema = async () => {
           table.json("options").nullable();
         });
         console.log("Added subscription_plans.options column");
+      }
+
+      const hasDeletedAt = await db.schema.hasColumn("subscription_plans", "deleted_at");
+      if (!hasDeletedAt) {
+        await db.schema.alterTable("subscription_plans", (table) => {
+          table.timestamp("deleted_at").nullable();
+        });
+        console.log("Added subscription_plans.deleted_at column");
       }
     })().catch((err) => {
       ensurePlanSchemaPromise = null;
@@ -66,6 +83,7 @@ router.get("/", async (req, res) => {
   try {
     const rows = await db("subscription_plans")
       .where("active", 1)
+      .whereNull("deleted_at")
       .orderBy("sort_order", "asc")
       .orderBy("created_at", "desc");
 
@@ -82,6 +100,7 @@ router.get("/", async (req, res) => {
 router.get("/admin/all", async (req, res) => {
   try {
     const rows = await db("subscription_plans")
+      .whereNull("deleted_at")
       .orderBy("sort_order", "asc")
       .orderBy("created_at", "desc");
 
@@ -101,6 +120,7 @@ router.get("/:id", async (req, res) => {
     const plan = await db("subscription_plans")
       .where({ id })
       .where("active", 1)
+      .whereNull("deleted_at")
       .first();
 
     if (!plan) {
@@ -119,7 +139,10 @@ router.get("/:id", async (req, res) => {
 router.get("/admin/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const plan = await db("subscription_plans").where({ id }).first();
+    const plan = await db("subscription_plans")
+      .where({ id })
+      .whereNull("deleted_at")
+      .first();
 
     if (!plan) {
       return res.fail(404, "Plan not found");
@@ -257,7 +280,10 @@ router.put("/:id", async (req, res) => {
     }
 
     // Check if plan exists
-    const existingPlan = await db("subscription_plans").where("id", id).first();
+    const existingPlan = await db("subscription_plans")
+      .where("id", id)
+      .whereNull("deleted_at")
+      .first();
     if (!existingPlan) {
       return res.fail(404, "Plan not found");
     }
@@ -319,25 +345,20 @@ router.delete("/:id", async (req, res) => {
     const { id } = req.params;
 
     // Check if plan exists first
-    const existingPlan = await db("subscription_plans").where("id", id).first();
+    const existingPlan = await db("subscription_plans")
+      .where("id", id)
+      .whereNull("deleted_at")
+      .first();
     if (!existingPlan) {
       return res.fail(404, "Plan not found");
     }
 
-    // Delete using Knex
-    const affectedRows = await db("subscription_plans").where("id", id).delete();
+    // Soft delete to avoid FK issues; also deactivate
+    await db("subscription_plans")
+      .where("id", id)
+      .update({ active: 0, deleted_at: new Date(), updated_at: new Date() });
 
-    if (affectedRows === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Plan not found",
-      });
-    }
-
-    res.json({
-      success: true,
-      message: "Plan deleted successfully",
-    });
+    res.success("Plan deleted successfully");
   } catch (error) {
     console.error("Error deleting plan:", error);
     res.status(500).json({
