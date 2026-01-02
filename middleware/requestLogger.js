@@ -14,7 +14,7 @@ export const requestLogger = (req, res, next) => {
   res.locals.requestId = requestId;
 
   console.log(
-    `➡️  [${requestId}] ${method} ${originalUrl} - ${req.ip || "unknown ip"}`
+    `[REQ] [${requestId}] ${method} ${originalUrl} - ${req.ip || "unknown ip"}`
   );
 
   res.on("finish", () => {
@@ -24,7 +24,7 @@ export const requestLogger = (req, res, next) => {
     const userLabel = req.user?.id ? `user:${req.user.id}` : "user:anonymous";
 
     console.log(
-      `✅ [${requestId}] ${method} ${originalUrl} -> ${status} (${duration}ms, ${contentLength}b, ${userLabel})`
+      `[RES] [${requestId}] ${method} ${originalUrl} -> ${status} (${duration}ms, ${contentLength}b, ${userLabel})`
     );
   });
 
@@ -34,10 +34,9 @@ export const requestLogger = (req, res, next) => {
     }
     const duration = formatDuration(startTime).toFixed(2);
     console.warn(
-      `⚠️  [${requestId}] ${method} ${originalUrl} - connection closed prematurely (${duration}ms)`
+      `[WARN] [${requestId}] ${method} ${originalUrl} - connection closed prematurely (${duration}ms)`
     );
   });
 
   next();
 };
-
