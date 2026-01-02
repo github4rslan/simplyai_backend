@@ -26,6 +26,7 @@ const toNumber = (value, defaultValue = 0) => {
 
 // Ensure the subscription_plans table has the columns we write to
 let ensurePlanSchemaPromise;
+let hasDeletedAtColumn = false;
 const ensurePlanSchema = async () => {
   if (!ensurePlanSchemaPromise) {
     ensurePlanSchemaPromise = (async () => {
@@ -45,11 +46,12 @@ const ensurePlanSchema = async () => {
         console.log("Added subscription_plans.options column");
       }
 
-      const hasDeletedAt = await db.schema.hasColumn("subscription_plans", "deleted_at");
-      if (!hasDeletedAt) {
+      hasDeletedAtColumn = await db.schema.hasColumn("subscription_plans", "deleted_at");
+      if (!hasDeletedAtColumn) {
         await db.schema.alterTable("subscription_plans", (table) => {
           table.timestamp("deleted_at").nullable();
         });
+        hasDeletedAtColumn = true;
         console.log("Added subscription_plans.deleted_at column");
       }
     })().catch((err) => {
@@ -81,9 +83,14 @@ const normalizePlan = (plan) => ({
 // Get all subscription plans
 router.get("/", async (req, res) => {
   try {
+    await ensurePlanSchema();
     const rows = await db("subscription_plans")
       .where("active", 1)
-      .whereNull("deleted_at")
+      .modify((qb) => {
+        if (hasDeletedAtColumn) {
+          qb.whereNull("deleted_at");
+        }
+      })
       .orderBy("sort_order", "asc")
       .orderBy("created_at", "desc");
 
@@ -99,8 +106,13 @@ router.get("/", async (req, res) => {
 // Get all subscription plans for admin (includes inactive)
 router.get("/admin/all", async (req, res) => {
   try {
+    await ensurePlanSchema();
     const rows = await db("subscription_plans")
-      .whereNull("deleted_at")
+      .modify((qb) => {
+        if (hasDeletedAtColumn) {
+          qb.whereNull("deleted_at");
+        }
+      })
       .orderBy("sort_order", "asc")
       .orderBy("created_at", "desc");
 
@@ -116,11 +128,16 @@ router.get("/admin/all", async (req, res) => {
 // Get single plan by ID
 router.get("/:id", async (req, res) => {
   try {
+    await ensurePlanSchema();
     const { id } = req.params;
     const plan = await db("subscription_plans")
       .where({ id })
       .where("active", 1)
-      .whereNull("deleted_at")
+      .modify((qb) => {
+        if (hasDeletedAtColumn) {
+          qb.whereNull("deleted_at");
+        }
+      })
       .first();
 
     if (!plan) {
@@ -138,10 +155,15 @@ router.get("/:id", async (req, res) => {
 // Get single plan by ID for admin (includes inactive)
 router.get("/admin/:id", async (req, res) => {
   try {
+    await ensurePlanSchema();
     const { id } = req.params;
     const plan = await db("subscription_plans")
       .where({ id })
-      .whereNull("deleted_at")
+      .modify((qb) => {
+        if (hasDeletedAtColumn) {
+          qb.whereNull("deleted_at");
+        }
+      })
       .first();
 
     if (!plan) {
@@ -282,7 +304,11 @@ router.put("/:id", async (req, res) => {
     // Check if plan exists
     const existingPlan = await db("subscription_plans")
       .where("id", id)
-      .whereNull("deleted_at")
+      .modify((qb) => {
+        if (hasDeletedAtColumn) {
+          qb.whereNull("deleted_at");
+        }
+      })
       .first();
     if (!existingPlan) {
       return res.fail(404, "Plan not found");
@@ -342,21 +368,29 @@ router.put("/:id", async (req, res) => {
 // Delete a plan
 router.delete("/:id", async (req, res) => {
   try {
+    await ensurePlanSchema();
     const { id } = req.params;
 
     // Check if plan exists first
     const existingPlan = await db("subscription_plans")
       .where("id", id)
-      .whereNull("deleted_at")
+      .modify((qb) => {
+        if (hasDeletedAtColumn) {
+          qb.whereNull("deleted_at");
+        }
+      })
       .first();
     if (!existingPlan) {
       return res.fail(404, "Plan not found");
     }
 
     // Soft delete to avoid FK issues; also deactivate
-    await db("subscription_plans")
-      .where("id", id)
-      .update({ active: 0, deleted_at: new Date(), updated_at: new Date() });
+    const updatePayload = { active: 0, updated_at: new Date() };
+    if (hasDeletedAtColumn) {
+      updatePayload.deleted_at = new Date();
+    }
+
+    await db("subscription_plans").where("id", id).update(updatePayload);
 
     res.success("Plan deleted successfully");
   } catch (error) {
