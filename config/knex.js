@@ -19,13 +19,14 @@ export const db = knex({
 });
 
 // Test connection
-db.raw("SELECT 1")
-  .then(() => {
-    console.log("✅ Knex database connection established");
-  })
-  .catch((err) => {
-    console.error("❌ Knex database connection failed:", err);
-  });
+if (process.env.NODE_ENV !== "production") {
+  db.raw("SELECT 1")
+    .then(() => {
+      console.log("Knex database connection established");
+    })
+    .catch((err) => {
+      console.error("Knex database connection failed:", err.message);
+    });
+}
 
 export default db;
-

@@ -35,9 +35,7 @@ export const errorHandler = (err, req, res, next) => {
   }
 
   console.error(
-    `❌ [${requestId || "no-id"}] ${req.method} ${req.originalUrl} -> ${
-      statusCode
-    }: ${err.message}`
+    `[ERROR] [${requestId || "no-id"}] ${req.method} ${req.originalUrl} -> ${statusCode}: ${err.message}`
   );
 
   if (statusCode >= 500) {
@@ -46,4 +44,3 @@ export const errorHandler = (err, req, res, next) => {
 
   res.status(statusCode).json(errorPayload);
 };
-

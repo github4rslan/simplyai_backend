@@ -24,7 +24,7 @@ const router = express.Router();
 
 const DEFAULT_FREE_PLAN = {
   name: "Piano Gratuito",
-  description: "Accesso gratuito con funzionalità essenziali",
+  description: "Accesso gratuito con funzionalita essenziali",
   buttonText: "Inizia ora",
   buttonVariant: "outline",
   features: [
