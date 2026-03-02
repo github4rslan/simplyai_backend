@@ -28,4 +28,22 @@ export const pool = mysql.createPool({
   waitForConnections: true,
   connectionLimit,
   queueLimit: 0,
+  ssl: {
+    rejectUnauthorized: false,
+  },
 });
+
+// Gracefully close the pool when the process is shutting down
+const shutdownPool = async (signal) => {
+  console.log(`${signal} received — closing database pool…`);
+  try {
+    await pool.end();
+    console.log("Database pool closed.");
+  } catch (err) {
+    console.error("Error closing database pool:", err.message);
+  }
+  process.exit(0);
+};
+
+process.on("SIGTERM", () => shutdownPool("SIGTERM"));
+process.on("SIGINT", () => shutdownPool("SIGINT"));

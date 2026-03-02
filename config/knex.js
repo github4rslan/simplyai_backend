@@ -11,6 +11,9 @@ export const db = knex({
     user: dbConfig.user,
     password: dbConfig.password,
     database: dbConfig.name,
+    ssl: {
+      rejectUnauthorized: false,
+    },
   },
   pool: {
     min: 2,

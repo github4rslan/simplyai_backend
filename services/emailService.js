@@ -39,22 +39,8 @@ export async function sendResetPasswordEmail(to, resetUrl) {
       `❌ Failed to send password reset email via ${emailProvider}:`,
       error.message
     );
-
-    // Fallback to console logging
-    console.log("📧 FALLBACK - Logging password reset email to console:");
-    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    console.log("📧 PASSWORD RESET EMAIL (Failed to send to:", to, ")");
-    console.log("Subject: Reset your password");
-    console.log("Reset URL:", resetUrl);
-    console.log("Error:", error.message);
-    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
-    return {
-      success: true, // Return success so the reset process continues
-      messageId: "fallback-" + Date.now(),
-      note: "Email logged to console (SMTP failed)",
-      error: error.message,
-    };
+    // Re-throw so the caller knows the email was NOT delivered
+    throw error;
   }
 }
 
@@ -173,7 +159,7 @@ export const sendPaymentNotificationEmail = async (
         ")"
       );
       console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      console.log("Subject: 🎉 Benvenuto in SimolyAI -", planData.name + "!");
+      console.log("Subject: 🎉 Benvenuto in SimplyAI -", planData.name + "!");
       console.log("User:", userInfo.firstName, userInfo.lastName);
       console.log(
         "Plan:",
@@ -193,9 +179,9 @@ export const sendPaymentNotificationEmail = async (
 
     const senderEmail = DEFAULT_SENDER;
     const mailOptions = {
-      from: `"SimolyAI" <${senderEmail}>`,
+      from: `"SimplyAI" <${senderEmail}>`,
       to: userInfo.email,
-      subject: `🎉 Benvenuto in SimolyAI - ${planData.name}!`,
+      subject: `🎉 Benvenuto in SimplyAI - ${planData.name}!`,
       html: htmlTemplate,
     };
 
@@ -223,7 +209,7 @@ export const sendPaymentNotificationEmail = async (
       userInfo.email,
       ")"
     );
-    console.log("Subject: 🎉 Benvenuto in SimolyAI -", planData.name + "!");
+    console.log("Subject: 🎉 Benvenuto in SimplyAI -", planData.name + "!");
     console.log("User:", userInfo.firstName, userInfo.lastName);
     console.log(
       "Plan:",
@@ -276,11 +262,11 @@ const generatePaymentNotificationTemplate = (
   });
 
   const headerTitle = isFreeRegistration
-    ? "🎉 Benvenuto in SimolyAI!"
+    ? "🎉 Benvenuto in SimplyAI!"
     : "🎉 Pagamento Completato!";
   const welcomeMessage = isFreeRegistration
-    ? "La tua registrazione è stata completata con successo! Benvenuto in <strong>SimolyAI</strong>."
-    : "Il tuo pagamento è stato elaborato con successo! Benvenuto in <strong>SimolyAI</strong>. Di seguito trovi i dettagli della tua transazione:";
+    ? "La tua registrazione è stata completata con successo! Benvenuto in <strong>SimplyAI</strong>."
+    : "Il tuo pagamento è stato elaborato con successo! Benvenuto in <strong>SimplyAI</strong>. Di seguito trovi i dettagli della tua transazione:";
 
   return `
     <!DOCTYPE html>
@@ -290,7 +276,7 @@ const generatePaymentNotificationTemplate = (
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>${
         isFreeRegistration ? "Registrazione Completata" : "Payment Confirmation"
-      } - SimolyAI</title>
+      } - SimplyAI</title>
       <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; background-color: #f8f9fa; }
         .container { max-width: 600px; margin: 0 auto; background-color: #ffffff; }
@@ -415,17 +401,17 @@ const generatePaymentNotificationTemplate = (
           
           <p>Se hai domande o hai bisogno di assistenza, non esitare a contattarci:</p>
           <ul>
-            <li>📧 Email: support@simolyai.com</li>
+            <li>📧 Email: support@simplyai.com</li>
             <li>📞 Telefono: +39 XXX XXX XXXX</li>
             <li>💬 Chat: Disponibile dalla dashboard</li>
           </ul>
           
-          <p>Grazie per aver scelto <strong>SimolyAI</strong>!</p>
+          <p>Grazie per aver scelto <strong>SimplyAI</strong>!</p>
         </div>
         
         <div class="footer">
           <p>
-            © 2024 SimolyAI. Tutti i diritti riservati.<br>
+            © 2024 SimplyAI. Tutti i diritti riservati.<br>
             <a href="${
               FRONTEND_URL
             }/privacy-policy">Privacy Policy</a> | 
@@ -505,7 +491,7 @@ export const sendDeadlineReminderEmail = async ({
 
     const senderEmail = DEFAULT_SENDER;
     const mailOptions = {
-      from: `"SimolyAI" <${senderEmail}>`,
+      from: `"SimplyAI" <${senderEmail}>`,
       to: email,
       subject: `Promemoria: Completa il tuo piano ${planName}`,
       html: htmlTemplate,
@@ -562,7 +548,7 @@ const generateDeadlineReminderTemplate = ({
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Promemoria Piano - SimolyAI</title>
+      <title>Promemoria Piano - SimplyAI</title>
       <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; background-color: #f8f9fa; }
         .container { max-width: 600px; margin: 0 auto; background-color: #ffffff; }
@@ -636,17 +622,17 @@ const generateDeadlineReminderTemplate = ({
           
           <p>Se hai domande o hai bisogno di assistenza, non esitare a contattarci:</p>
           <ul>
-            <li>📧 Email: support@simolyai.com</li>
+            <li>📧 Email: support@simplyai.com</li>
             <li>📞 Telefono: +39 XXX XXX XXXX</li>
             <li>💬 Chat: Disponibile dalla dashboard</li>
           </ul>
           
-          <p>Grazie per utilizzare <strong>SimolyAI</strong>!</p>
+          <p>Grazie per utilizzare <strong>SimplyAI</strong>!</p>
         </div>
         
         <div class="footer">
           <p>
-            © 2024 SimolyAI. Tutti i diritti riservati.<br>
+            © 2024 SimplyAI. Tutti i diritti riservati.<br>
             <a href="${
               FRONTEND_URL
             }/privacy-policy">Privacy Policy</a> | 

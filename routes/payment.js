@@ -5,13 +5,14 @@ import { v4 as uuidv4 } from 'uuid';
 import { pool } from '../db.js';
 import { sendPaymentNotificationEmail } from '../services/emailService.js';
 import { authenticateToken } from "../middleware/authMiddleware.js";
+import { appConfig } from '../config/app.js';
 
 const router = express.Router();
 
 // Process regular payment and create account
 router.post('/process-payment', async (req, res) => {
   const { userInfo, paymentInfo, planInfo, tempUserId } = req.body;
-  
+
   console.log('💳 Processing payment request...');
   console.log('User Info:', userInfo);
   console.log('Payment Info:', paymentInfo);
@@ -33,7 +34,7 @@ router.post('/process-payment', async (req, res) => {
     // Check if this is a temporary registration (paid plan) or direct payment
     if (tempUserId) {
       console.log('🔍 Looking up temporary registration data...');
-      
+
       // Get temporary registration data
       const [tempData] = await pool.query(
         'SELECT * FROM temp_registrations WHERE id = ? AND email = ? AND expires_at > NOW()',
@@ -56,7 +57,7 @@ router.post('/process-payment', async (req, res) => {
         phone: tempReg.phone
       };
       hashedPassword = tempReg.password_hash;
-      
+
       console.log('✅ Temporary registration found:', userData.id);
     } else {
       // Direct payment without prior registration (existing flow)
@@ -132,7 +133,7 @@ router.post('/process-payment', async (req, res) => {
           planInfo.id,
           paymentInfo.amount,
           paymentInfo.method,
-          transactionId // If you have the real Stripe PaymentIntent ID, use it here instead
+          transactionId
         ]
       );
 
@@ -151,18 +152,18 @@ router.post('/process-payment', async (req, res) => {
 
       console.log('✅ User account created successfully after payment:', userData.id);
 
-      // Generate JWT token
+      // Generate JWT token using centralised secret
       const token = jwt.sign(
-        { 
-          userId: userData.id, 
+        {
+          userId: userData.id,
           email: userData.email,
           planId: planInfo.id
         },
-        process.env.JWT_SECRET || 'default_secret',
+        appConfig.security.jwtSecret,
         { expiresIn: '24h' }
       );
 
-      // Send payment notification email using new unified format
+      // Send payment notification email
       const emailResult = await sendPaymentNotificationEmail({
         email: userData.email,
         firstName: userData.firstName,
@@ -174,7 +175,7 @@ router.post('/process-payment', async (req, res) => {
         transactionId: transactionId,
         isFreeRegistration: false
       });
-      
+
       console.log('✅ Payment processed successfully');
       console.log('📧 Email notification result:', emailResult);
 
@@ -208,7 +209,7 @@ router.post('/process-payment', async (req, res) => {
 // Process payment for existing OAuth users
 router.post('/process-oauth-payment', async (req, res) => {
   const { userId, userInfo, paymentInfo, planInfo } = req.body;
-  
+
   console.log('💳 Processing OAuth user payment...');
   console.log('📊 Complete request body:', JSON.stringify(req.body, null, 2));
   console.log('🔍 Individual fields:');
@@ -218,9 +219,8 @@ router.post('/process-oauth-payment', async (req, res) => {
   console.log('- Plan Info:', JSON.stringify(planInfo, null, 2));
 
   try {
-    // Validate required fields with detailed logging
     console.log('🔍 Validating required fields...');
-    
+
     if (!userId) {
       console.error('❌ Missing userId:', userId);
       return res.status(400).json({
@@ -228,7 +228,7 @@ router.post('/process-oauth-payment', async (req, res) => {
         message: 'Missing required fields: userId'
       });
     }
-    
+
     if (!userInfo || !userInfo.email) {
       console.error('❌ Missing userInfo.email:', userInfo?.email);
       return res.status(400).json({
@@ -236,7 +236,7 @@ router.post('/process-oauth-payment', async (req, res) => {
         message: 'Missing required fields: userInfo.email'
       });
     }
-    
+
     if (!paymentInfo || !paymentInfo.method) {
       console.error('❌ Missing paymentInfo.method:', paymentInfo?.method);
       return res.status(400).json({
@@ -244,7 +244,7 @@ router.post('/process-oauth-payment', async (req, res) => {
         message: 'Missing required fields: paymentInfo.method'
       });
     }
-    
+
     if (!planInfo || !planInfo.id) {
       console.error('❌ Missing planInfo.id:', planInfo?.id);
       return res.status(400).json({
@@ -252,7 +252,7 @@ router.post('/process-oauth-payment', async (req, res) => {
         message: 'Missing required fields: planInfo.id'
       });
     }
-    
+
     console.log('✅ All required fields validated successfully');
 
     // Verify user exists, if not create them (for OAuth users)
@@ -264,7 +264,6 @@ router.post('/process-oauth-payment', async (req, res) => {
     let user;
     if (existingUsers.length === 0) {
       console.log('👤 User not found, creating OAuth user profile...');
-      // Create the OAuth user profile
       await pool.query(
         `INSERT INTO profiles (
           id, email, first_name, last_name, created_at, updated_at
@@ -276,7 +275,7 @@ router.post('/process-oauth-payment', async (req, res) => {
           userInfo.lastName || ''
         ]
       );
-      
+
       user = {
         id: userId,
         email: userInfo.email,
@@ -307,7 +306,7 @@ router.post('/process-oauth-payment', async (req, res) => {
           planInfo.id,
           paymentInfo.amount,
           paymentInfo.method,
-          transactionId // If you have the real Stripe PaymentIntent ID, use it here instead
+          transactionId
         ]
       );
 
@@ -315,14 +314,14 @@ router.post('/process-oauth-payment', async (req, res) => {
       await connection.commit();
       connection.release();
 
-      // Generate JWT token
+      // Generate JWT token using centralised secret
       const token = jwt.sign(
-        { 
-          userId: userId, 
+        {
+          userId: userId,
           email: user.email,
           planId: planInfo.id
         },
-        process.env.JWT_SECRET || 'default_secret',
+        appConfig.security.jwtSecret,
         { expiresIn: '24h' }
       );
 
@@ -349,7 +348,7 @@ router.post('/process-oauth-payment', async (req, res) => {
 
       console.log('📋 Plan details fetched for email:', actualPlanInfo);
 
-      // Send payment notification email using new unified format
+      // Send payment notification email
       const emailResult = await sendPaymentNotificationEmail({
         email: user.email,
         firstName: user.first_name,
@@ -361,7 +360,7 @@ router.post('/process-oauth-payment', async (req, res) => {
         transactionId: transactionId,
         isFreeRegistration: false
       });
-      
+
       console.log('✅ OAuth payment processed successfully');
       console.log('📧 Email notification result:', emailResult);
 
@@ -391,8 +390,6 @@ router.post('/process-oauth-payment', async (req, res) => {
     });
   }
 });
-
-export default router;
 
 // Subscribe to a free plan for an already logged-in user
 router.post('/subscribe-free', authenticateToken, async (req, res) => {
@@ -460,3 +457,5 @@ router.post('/subscribe-free', authenticateToken, async (req, res) => {
     });
   }
 });
+
+export default router;

@@ -41,10 +41,13 @@ router.get("/:id", async (req, res) => {
     }
 
     const questionnaire = rows[0];
-    questionnaire.questions =
-      typeof questionnaire.questions === "string"
-        ? JSON.parse(questionnaire.questions)
-        : questionnaire.questions;
+    if (typeof questionnaire.questions === "string") {
+      try {
+        questionnaire.questions = JSON.parse(questionnaire.questions);
+      } catch {
+        questionnaire.questions = null;
+      }
+    }
 
     res.json({
       success: true,

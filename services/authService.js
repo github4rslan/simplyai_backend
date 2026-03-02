@@ -2,10 +2,10 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { v4 as uuidv4 } from "uuid";
 import { pool } from "../db.js";
+import { appConfig } from "../config/app.js";
 
-// JWT Secret
-const JWT_SECRET =
-  process.env.JWT_SECRET || "your-super-secret-jwt-key-change-in-production";
+// JWT Secret — always sourced from the single appConfig to avoid divergence
+const JWT_SECRET = appConfig.security.jwtSecret;
 
 class AuthService {
   /**

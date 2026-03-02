@@ -50,7 +50,18 @@ console.log("Allowed CORS origins:", allowedOrigins);
 // Security headers
 app.use(
   helmet({
-    contentSecurityPolicy: false, // disable CSP here if not configured
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'"],
+        styleSrc: ["'self'", "'unsafe-inline'", "fonts.googleapis.com"],
+        fontSrc: ["'self'", "fonts.gstatic.com", "data:"],
+        imgSrc: ["'self'", "data:", "https:", "blob:"],
+        connectSrc: ["'self'", appConfig.server.frontendUrl, appConfig.server.backendUrl],
+        frameSrc: ["'none'"],
+        objectSrc: ["'none'"],
+      },
+    },
   })
 );
 

@@ -4,6 +4,7 @@ import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import { pool } from "../db.js";
 import { sendResetPasswordEmail } from "../services/emailService.js";
+import { appConfig } from "../config/app.js";
 
 const router = express.Router();
 
@@ -40,9 +41,7 @@ router.post("/forgot-password", async (req, res) => {
     );
 
     // 4. Email the user
-    const resetUrl = `${
-      process.env.FRONTEND_URL || "http://localhost:5173"
-    }/reset-password?token=${token}&uid=${user.user_id}`;
+    const resetUrl = `${appConfig.server.frontendUrl}/reset-password?token=${token}&uid=${user.user_id}`;
     await sendResetPasswordEmail(user.email, resetUrl);
 
     return res.json({

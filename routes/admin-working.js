@@ -3,17 +3,12 @@ import bcrypt from "bcryptjs";
 import { v4 as uuidv4 } from "uuid";
 import { db } from "../config/knex.js";
 import { sendDeadlineReminderEmail } from "../services/emailService.js";
+import { requireAdmin } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
-// Temporary middleware for testing
-const tempRequireAdmin = (req, res, next) => {
-  // For now, just pass through - we'll add proper auth later
-  next();
-};
-
 // Get all users for admin panel
-router.get("/users", tempRequireAdmin, async (req, res) => {
+router.get("/users", requireAdmin, async (req, res) => {
   try {
     console.log("Admin fetching users from database...");
 
@@ -56,7 +51,7 @@ router.get("/users", tempRequireAdmin, async (req, res) => {
 });
 
 // Delete user (admin only)
-router.delete("/users/:id", tempRequireAdmin, async (req, res) => {
+router.delete("/users/:id", requireAdmin, async (req, res) => {
   try {
     const userId = req.params.id; // Keep as string for UUID
     console.log(`Admin attempting to delete user ${userId}`);
@@ -120,7 +115,7 @@ router.delete("/users/:id", tempRequireAdmin, async (req, res) => {
 });
 
 // Update user role (admin only)
-router.put("/users/:id/role", tempRequireAdmin, async (req, res) => {
+router.put("/users/:id/role", requireAdmin, async (req, res) => {
   try {
     const userId = req.params.id; // Keep as string for UUID
     const { role } = req.body;
@@ -173,7 +168,7 @@ router.put("/users/:id/role", tempRequireAdmin, async (req, res) => {
 // Get questionnaire progress for all users (admin only)
 router.get(
   "/users/questionnaire-progress",
-  tempRequireAdmin,
+  requireAdmin,
   async (req, res) => {
     try {
       console.log(
@@ -276,7 +271,7 @@ router.get(
 // Get questionnaire progress for a specific user (admin only)
 router.get(
   "/users/:id/questionnaire-progress",
-  tempRequireAdmin,
+  requireAdmin,
   async (req, res) => {
     try {
       const userId = req.params.id;
@@ -358,7 +353,7 @@ router.get(
 );
 
 // Get user details (admin only) - This route must come AFTER specific routes
-router.get("/users/:id", tempRequireAdmin, async (req, res) => {
+router.get("/users/:id", requireAdmin, async (req, res) => {
   try {
     const userId = req.params.id; // Keep as string for UUID
     console.log(`Admin fetching details for user ${userId}`);
@@ -399,7 +394,7 @@ router.get("/users/:id", tempRequireAdmin, async (req, res) => {
 });
 
 // Create new user (admin only)
-router.post("/users", tempRequireAdmin, async (req, res) => {
+router.post("/users", requireAdmin, async (req, res) => {
   try {
     const {
       email,
@@ -523,7 +518,7 @@ router.post("/users", tempRequireAdmin, async (req, res) => {
     });
   }
 });
-router.get("/users/incomplete-plans", tempRequireAdmin, async (req, res) => {
+router.get("/users/incomplete-plans", requireAdmin, async (req, res) => {
   try {
     const users = await db("profiles as p")
       .select(
@@ -579,7 +574,7 @@ router.get("/users/incomplete-plans", tempRequireAdmin, async (req, res) => {
 // Send deadline reminder emails to users
 router.post(
   "/users/send-deadline-reminders",
-  tempRequireAdmin,
+  requireAdmin,
   async (req, res) => {
     try {
       const { userIds } = req.body;

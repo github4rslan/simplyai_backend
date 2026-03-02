@@ -85,7 +85,17 @@ export const appConfig = {
     connectionLimit: parseNumber(getEnv("DB_POOL_SIZE", "10"), 10),
   },
   security: {
-    jwtSecret: getEnv("JWT_SECRET", "change-me-in-production"),
+    jwtSecret: (() => {
+      const secret = getEnv("JWT_SECRET");
+      if (!secret) {
+        if (getEnv("NODE_ENV", "development") === "production") {
+          throw new Error("JWT_SECRET environment variable must be set in production");
+        }
+        console.warn("⚠️  JWT_SECRET is not set. Using insecure default — set JWT_SECRET in .env before deploying.");
+        return "change-me-in-production";
+      }
+      return secret;
+    })(),
   },
   oauth: {
     google: {

@@ -1431,9 +1431,9 @@ router.delete("/cleanup-expired-registrations", async (req, res) => {
 
     res.json({
       success: true,
-      message: `Cleaned up ${result.affectedRows} expired registrations`,
+      message: `Cleaned up ${affectedRows} expired registrations`,
       data: {
-        deletedCount: result.affectedRows,
+        deletedCount: affectedRows,
       },
     });
   } catch (error) {
