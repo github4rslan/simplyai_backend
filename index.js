@@ -119,15 +119,6 @@ app.use("/", express.static(path.join(__dirname, "../public"), {
 const frontendDist = path.join(__dirname, "../simplyai-FE/dist");
 if (fs.existsSync(frontendDist)) {
   app.use(express.static(frontendDist));
-
-  // SPA fallback
-  app.get("*", (req, res, next) => {
-    const indexPath = path.join(frontendDist, "index.html");
-    if (fs.existsSync(indexPath)) {
-      return res.sendFile(indexPath);
-    }
-    return next();
-  });
 } else {
   console.warn("Frontend dist not found; skipping static serve of ../simplyai-FE/dist");
 }
@@ -192,8 +183,17 @@ app.use(notFoundHandler);
 app.use(errorHandler);
 
 const PORT = appConfig.server.port || 4000;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Backend server running on port ${PORT}`);
   console.log("Prompt templates API added");
 });
 
+server.on("error", (error) => {
+  if (error.code === "EADDRINUSE") {
+    console.error(`Port ${PORT} is already in use. Set a different PORT in .env and retry.`);
+    process.exit(1);
+  }
+
+  console.error("Failed to start backend server:", error);
+  process.exit(1);
+});
